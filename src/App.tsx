@@ -206,6 +206,12 @@ export default function App() {
     }
   };
 
+  const handleRestFourHours = () => {
+    if (engineRef.current) {
+      engineRef.current.restFourHours();
+    }
+  };
+
   const handleFeedApple = () => {
     if (engineRef.current) {
       engineRef.current.feedHorseApple();
@@ -278,6 +284,7 @@ export default function App() {
             onTriggerStarBurst={handleTriggerStarBurst}
             onToggleCamp={handleToggleCamp}
             onOpenCampMenu={() => setShowCampModal(true)}
+            onRestFourHours={handleRestFourHours}
             onFeedApple={handleFeedApple}
             onCycleCamera={handleCycleCamera}
             onOpenMap={() => setShowWorldMap(true)}
@@ -328,6 +335,8 @@ export default function App() {
       {showCampModal && (
         <CampModal
           horseName={horse.name}
+          timeLabel={timeLabel}
+          onRestFourHours={handleRestFourHours}
           onSleepUntilDawn={handleSleepUntilDawn}
           onPackCampAndMount={() => {
             if (engineRef.current) {

@@ -8,7 +8,7 @@ import {
   AbandonedStable,
   FoxActor,
 } from './types';
-import { MaterialPalette, createStarParticleTexture } from './materials';
+import { MaterialPalette, createStarParticleTexture, createGroundBumpTexture } from './materials';
 import {
   createHorseAndRider,
   createStandaloneRider,
@@ -23,6 +23,8 @@ import {
   createAbandonedStable,
   createCampfireSite,
   createLonelyMountainModel,
+  createDaleLakeCity,
+  createLakeshorePier,
   createTree,
   extractMaterialBatches,
   MaterialBatch,
@@ -32,6 +34,7 @@ import {
 } from './models';
 import {
   getTerrainHeight,
+  getMountainTrailElevation,
   getRoadCenter,
   createWorldTerrain,
   createInstancedFlora,
@@ -39,6 +42,9 @@ import {
   WORLD_LENGTH,
   WORLD_WIDTH,
   WORLD_MILESTONES,
+  LAKE_START_Z,
+  LAKE_END_Z,
+  LAKE_WATER_Y,
 } from './terrain';
 import { soundEngine } from './audio';
 
@@ -99,6 +105,9 @@ export class GameEngine {
   private campPos = new THREE.Vector3();
   public isCamped: boolean = false;
   public isDismounted: boolean = false;
+  private waterBumpTex: THREE.CanvasTexture | null = null;
+  private transientPrompt: string | null = null;
+  private transientPromptTimer: number = 0;
 
   // Particle systems & Star Burst ('Błysk') VFX
   private starParticles!: THREE.Points;
@@ -540,6 +549,8 @@ export class GameEngine {
       { z: 268, offset: 15.5, roofIdx: 0 },
       { z: 324, offset: -16, roofIdx: 1 },
       { z: 474, offset: -14, roofIdx: 1 }, // Ranger cottage near Opuszczona Stajnia pod Dębem
+      { z: 1645, offset: -11.5, roofIdx: 2 }, // Lakeshore harbor cottage along Długie Jezioro
+      { z: 1895, offset: -12.0, roofIdx: 0 }, // Northern lakeshore outpost before Lonely Mountain
     ];
 
     settlementCottages.forEach((c) => {
@@ -571,6 +582,7 @@ export class GameEngine {
       { z: 100, offset: 9.0, rot: -0.25 },
       { z: 294, offset: -9.2, rot: 0.3 },
       { z: 452, offset: 8.8, rot: -0.4 },
+      { z: 1656, offset: -8.6, rot: 0.2 },
     ].forEach((wg) => {
       const x = getRoadCenter(wg.z) + wg.offset;
       const y = getTerrainHeight(x, wg.z);
@@ -581,10 +593,11 @@ export class GameEngine {
       this.colliders.push({ x, z: wg.z, r: 2.0 });
     });
 
-    // Glowing Village Lantern Posts lining Shire villages & Stable waystation
-    [62, 88, 114, 138, 224, 254, 286, 320, 352, 448, 476].forEach((z, idx) => {
-      const side = idx % 2 === 0 ? 1 : -1;
-      const x = getRoadCenter(z) + side * 6.0;
+    // Glowing Village Lantern Posts lining Shire villages, Stable waystation & Lakeshore Harbor
+    [62, 88, 114, 138, 224, 254, 286, 320, 352, 448, 476, 1635, 1742, 1768, 1890].forEach((z, idx) => {
+      const inLakeZone = z >= LAKE_START_Z && z <= LAKE_END_Z;
+      const side = inLakeZone ? (idx % 2 === 0 ? -1 : 1) : idx % 2 === 0 ? 1 : -1;
+      const x = getRoadCenter(z) + side * (inLakeZone && side > 0 ? 4.4 : 6.0);
       const y = getTerrainHeight(x, z);
       const lanternPost = createVillageLanternPost(this.materialPalette);
       lanternPost.position.set(x, y, z);
@@ -663,10 +676,11 @@ export class GameEngine {
       }
     });
 
-    // Regular Biome Trees across open meadows, clearings & mountain cliff ledges
+    // Regular Biome Trees across open meadows, clearings, lakeshore hills & mountain cliff ledges
     for (let z = 28; z < WORLD_LENGTH - 95; z += 14) {
       const roadX = getRoadCenter(z);
-      const inMountains = z >= 870 && z <= 1530;
+      const inMountains = z >= 870 && z <= 1525;
+      const inLakeZone = z > LAKE_START_Z && z < LAKE_END_Z;
 
       if (inMountains) {
         // Place alpine pines only on higher mountain cliff ledges away from narrow trail & stable pocket
@@ -684,9 +698,25 @@ export class GameEngine {
           pushFloraInstance('pine', x, y, z, s, Math.random() * Math.PI * 2);
           this.colliders.push({ x, z, r: 0.9 });
         }
+      } else if (inLakeZone) {
+        // West shoreline hills + far eastern shore across the water (never inside the lake!)
+        const westNear = roadX - (10.5 + Math.random() * 22);
+        const westFar = roadX - (36 + Math.random() * 38);
+        const eastFar = roadX + (93 + Math.random() * 24);
+        [westNear, westFar, eastFar].forEach((x, idx) => {
+          if (idx === 1 && Math.random() > 0.65) return;
+          if (Math.abs(z - 1645) < 16 && Math.abs(x - (roadX - 11.5)) < 12) return;
+          if (Math.abs(z - 1895) < 16 && Math.abs(x - (roadX - 12.0)) < 12) return;
+          const y = getTerrainHeight(x, z);
+          if (y < LAKE_WATER_Y + 0.6) return;
+          const kind: FloraKind = idx === 0 && z % 28 === 0 ? 'willow' : 'pine';
+          const s = 0.84 + Math.random() * 0.46;
+          pushFloraInstance(kind, x, y, z, s, Math.random() * Math.PI * 2);
+          if (x < roadX) this.colliders.push({ x, z, r: 0.9 });
+        });
       } else {
         const type: 'apple' | 'willow' | 'pine' =
-          z > 400 && z < 870 ? 'willow' : z >= 1530 ? 'pine' : 'apple';
+          z > 400 && z < 870 ? 'willow' : z >= LAKE_END_Z ? 'pine' : 'apple';
 
         [-1, 1].forEach((side) => {
           const nearOffset = 10.5 + Math.random() * 24;
@@ -743,14 +773,15 @@ export class GameEngine {
       this.colliders.push({ x: stable.x, z: stable.z, r: 3.6 });
     });
 
-    // 7. Monsters (Goblins, Orcs, Trolls) — mountain spawns hug the narrow ridge pass safely
+    // 7. Monsters (Goblins, Orcs, Trolls) — Misty Mountains pass & Lonely Mountain approach
     const monsterSpawns: Array<{ id: string; type: 'goblin' | 'orc' | 'troll'; x: number; z: number }> = [
       { id: 'm1', type: 'goblin', x: getRoadCenter(520) - 9, z: 520 },
       { id: 'm2', type: 'goblin', x: getRoadCenter(680) + 10, z: 680 },
       { id: 'm3', type: 'orc', x: getRoadCenter(980) - 1.3, z: 980 },
       { id: 'm4', type: 'orc', x: getRoadCenter(1180) + 1.2, z: 1180 },
       { id: 'm5', type: 'troll', x: getRoadCenter(1380) - 1.4, z: 1380 },
-      { id: 'm6', type: 'troll', x: getRoadCenter(1620) + 11, z: 1620 },
+      { id: 'm6', type: 'orc', x: getRoadCenter(2110) - 8, z: 2110 },
+      { id: 'm7', type: 'troll', x: getRoadCenter(2250) + 9, z: 2250 },
     ];
 
     monsterSpawns.forEach((m) => {
@@ -774,9 +805,53 @@ export class GameEngine {
       });
     });
 
-    // 8. The Great Lonely Mountain at the horizon
+    // 8. Długie Jezioro (The Long Lake), Shore Viewing Pier & City of Dale on stilts
+    const waterGeo = new THREE.PlaneGeometry(98, 480, 32, 110);
+    waterGeo.rotateX(-Math.PI / 2);
+    const wPos = waterGeo.attributes.position;
+    for (let i = 0; i < wPos.count; i++) {
+      const localX = wPos.getX(i);
+      const z = wPos.getZ(i) + 1770; // spans 1530 .. 2010
+      const roadX = getRoadCenter(z);
+      const u = (localX + 49) / 98;
+      const worldX = roadX + 4.3 + u * 94.0;
+      wPos.setXYZ(i, worldX, LAKE_WATER_Y, z);
+    }
+    waterGeo.computeVertexNormals();
+
+    this.waterBumpTex = createGroundBumpTexture();
+    this.waterBumpTex.anisotropy = maxAniso;
+    this.waterBumpTex.repeat.set(14, 44);
+    const lakeMat = new THREE.MeshPhysicalMaterial({
+      color: 0x185c7a,
+      roughness: 0.12,
+      metalness: 0.14,
+      clearcoat: 0.92,
+      clearcoatRoughness: 0.08,
+      bumpMap: this.waterBumpTex,
+      bumpScale: 0.04,
+      transparent: true,
+      opacity: 0.91,
+    });
+    const lakeMesh = new THREE.Mesh(waterGeo, lakeMat);
+    lakeMesh.receiveShadow = true;
+    this.scene.add(lakeMesh);
+
+    const daleCity = createDaleLakeCity(this.materialPalette);
+    daleCity.position.set(getRoadCenter(1770) + 46, LAKE_WATER_Y, 1770);
+    this.scene.add(daleCity);
+
+    const pierZ = 1755;
+    const pier = createLakeshorePier(this.materialPalette);
+    pier.position.set(getRoadCenter(pierZ) + 3.6, getMountainTrailElevation(pierZ), pierZ);
+    this.scene.add(pier);
+
+    // 9. The Great Lonely Mountain at the horizon facing the approaching hero
     const lonelyMountain = createLonelyMountainModel(this.materialPalette);
-    lonelyMountain.position.set(getRoadCenter(1850), 0, 1940);
+    const ereborX = getRoadCenter(2380);
+    const ereborY = Math.max(0, getTerrainHeight(ereborX, 2380) - 2.0);
+    lonelyMountain.position.set(ereborX, ereborY, 2465);
+    lonelyMountain.rotation.y = Math.PI;
     this.scene.add(lonelyMountain);
   }
 
@@ -1204,11 +1279,12 @@ export class GameEngine {
         this.campObject = createCampfireSite(this.materialPalette);
         this.scene.add(this.campObject);
       }
-      // Place tent & campfire directly in front of the rider
+      // Place tent & campfire directly in front of the rider (safely on dry ground/pier)
       const campX = this.riderPos.x + Math.sin(this.riderHeading) * 3.2;
       const campZ = this.riderPos.z + Math.cos(this.riderHeading) * 3.2;
-      const campY = getTerrainHeight(campX, campZ);
-      this.campPos.set(campX, campY, campZ);
+      this.campPos.set(campX, 0, campZ);
+      this.clampLakeShore(this.campPos);
+      this.campPos.y = this.getWalkableGroundY(this.campPos.x, this.campPos.z);
       this.campObject.position.copy(this.campPos);
       this.campObject.rotation.y = this.riderHeading;
       this.campObject.visible = true;
@@ -1217,11 +1293,13 @@ export class GameEngine {
       this.stamina = this.maxStamina;
       this.callbacks.onStaminaChange(this.stamina, this.maxStamina);
       soundEngine.playWhinny();
-      this.callbacks.onInteractPrompt('Zeszłaś z konia i rozbiłaś obóz z namiotem pod gwiazdami!');
+      this.showTransientPrompt('Zeszłaś z konia i rozbiłaś obóz z namiotem! Możesz odpocząć 4h lub do świtu. 🏕️');
     } else {
       if (this.campObject) {
         this.campObject.visible = false;
       }
+      this.transientPrompt = null;
+      this.transientPromptTimer = 0;
       this.callbacks.onInteractPrompt(null);
     }
     this.callbacks.onCampChange(this.isCamped);
@@ -1233,6 +1311,22 @@ export class GameEngine {
     this.callbacks.onStaminaChange(this.stamina, this.maxStamina);
     soundEngine.playWhinny();
     this.toggleDismount(true); // Packs camp and mounts horse refreshed for morning ride!
+    this.showTransientPrompt('Przespałaś noc w namiocie aż do złotego świtu! Energia: 100% 🌅');
+  }
+
+  public restFourHours() {
+    this.timeOfDay = (this.timeOfDay + 4 / 24) % 1.0;
+    this.stamina = this.maxStamina;
+    this.callbacks.onStaminaChange(this.stamina, this.maxStamina);
+    soundEngine.playChompOrBrush();
+    soundEngine.playWhinny();
+    this.showTransientPrompt('Odpoczęłaś 4 godziny przy ognisku! Minęły 4h, a siły wróciły do 100%. 🏕️');
+  }
+
+  private showTransientPrompt(message: string, duration = 3.6) {
+    this.transientPrompt = message;
+    this.transientPromptTimer = duration;
+    this.callbacks.onInteractPrompt(message);
   }
 
   public feedHorseApple() {
@@ -1243,7 +1337,7 @@ export class GameEngine {
       soundEngine.playWhinny();
       this.callbacks.onApplesChange(this.applesCollected);
       this.callbacks.onStaminaChange(this.stamina, this.maxStamina);
-      this.callbacks.onInteractPrompt('Podałaś koniowi chrupiące jabłko! Energia odnowiona!');
+      this.showTransientPrompt('Podałaś koniowi chrupiące jabłko! Energia odnowiona! 🍎');
     }
   }
 
@@ -1286,6 +1380,16 @@ export class GameEngine {
   }
 
   private updateSimulation(dt: number) {
+    if (this.transientPromptTimer > 0) {
+      this.transientPromptTimer = Math.max(0, this.transientPromptTimer - dt);
+      if (this.transientPromptTimer === 0) {
+        this.transientPrompt = null;
+      }
+    }
+    if (this.waterBumpTex) {
+      this.waterBumpTex.offset.x = (this.waterBumpTex.offset.x + dt * 0.035) % 1;
+      this.waterBumpTex.offset.y = (this.waterBumpTex.offset.y + dt * 0.055) % 1;
+    }
     this.updateDayNight(dt);
     this.updateHorseLocomotion(dt);
     this.updateLegsAndRiderAnimation(dt);
@@ -1505,9 +1609,10 @@ export class GameEngine {
       this.riderPos.x += Math.sin(this.riderHeading) * this.riderSpeed * dt;
       this.riderPos.z += Math.cos(this.riderHeading) * this.riderSpeed * dt;
       this.resolveWorldCollisions(this.riderPos, 0.55);
+      this.clampLakeShore(this.riderPos);
       this.riderPos.x = Math.max(-WORLD_WIDTH * 0.42, Math.min(WORLD_WIDTH * 0.42, this.riderPos.x));
       this.riderPos.z = Math.max(10, Math.min(WORLD_LENGTH, this.riderPos.z));
-      this.riderPos.y = getTerrainHeight(this.riderPos.x, this.riderPos.z);
+      this.riderPos.y = this.getWalkableGroundY(this.riderPos.x, this.riderPos.z);
 
       this.standaloneRiderRig.group.position.copy(this.riderPos);
       this.standaloneRiderRig.group.rotation.y = this.riderHeading;
@@ -1594,12 +1699,13 @@ export class GameEngine {
     this.horsePos.x += moveX;
     this.horsePos.z += moveZ;
     this.resolveWorldCollisions(this.horsePos, 0.95);
+    this.clampLakeShore(this.horsePos);
 
     // Bound horse inside playable world
     this.horsePos.x = Math.max(-WORLD_WIDTH * 0.42, Math.min(WORLD_WIDTH * 0.42, this.horsePos.x));
     this.horsePos.z = Math.max(10, Math.min(WORLD_LENGTH, this.horsePos.z));
 
-    const groundY = getTerrainHeight(this.horsePos.x, this.horsePos.z);
+    const groundY = this.getWalkableGroundY(this.horsePos.x, this.horsePos.z);
     this.horsePos.y = groundY + this.jumpYOffset;
 
     // Determine gait from actual speed
@@ -1943,7 +2049,7 @@ export class GameEngine {
 
     if (!prompt && this.isDismounted) {
       if (this.isCamped && actorPos.distanceTo(this.campPos) < 6.0) {
-        prompt = '[E] Odpocznij w namiocie (Nocuj do świtu) · [G] Wsiądź na konia 🏕️';
+        prompt = '[E] Menu obozu (Odpocznij 4h / Nocuj do świtu) · [G] Wsiądź na konia 🏕️';
       } else if (this.riderPos.distanceTo(this.horsePos) < 3.6) {
         prompt = '[G] lub [E] Wsiądź z powrotem na konia 🐎';
       } else if (this.isCamped) {
@@ -1951,7 +2057,41 @@ export class GameEngine {
       }
     }
 
-    this.callbacks.onInteractPrompt(prompt);
+    if (this.transientPrompt && this.transientPromptTimer > 0) {
+      this.callbacks.onInteractPrompt(this.transientPrompt);
+    } else {
+      this.callbacks.onInteractPrompt(prompt);
+    }
+  }
+
+  private isOnLakeshorePier(x: number, z: number): boolean {
+    const roadX = getRoadCenter(1755);
+    return Math.abs(z - 1755) <= 1.35 && x >= roadX + 3.4 && x <= roadX + 11.4;
+  }
+
+  private getWalkableGroundY(x: number, z: number): number {
+    if (this.isOnLakeshorePier(x, z)) {
+      return 18.18;
+    }
+    return getTerrainHeight(x, z);
+  }
+
+  private clampLakeShore(pos: THREE.Vector3) {
+    if (pos.z <= LAKE_START_Z + 12 || pos.z >= LAKE_END_Z - 12) return;
+    const roadX = getRoadCenter(pos.z);
+    const pierRoadX = getRoadCenter(1755);
+
+    // Allow riding onto the timber viewing pier (z = 1755) cleanly without stepping off sides
+    if (Math.abs(pos.z - 1755) <= 1.45 && pos.x >= pierRoadX + 3.6) {
+      pos.z = Math.max(1753.7, Math.min(1756.3, pos.z));
+      pos.x = Math.min(pierRoadX + 11.1, pos.x);
+      return;
+    }
+
+    const maxShoreX = roadX + 6.1;
+    if (pos.x > maxShoreX) {
+      pos.x = maxShoreX;
+    }
   }
 
   // Mobile virtual joystick control
@@ -2027,6 +2167,7 @@ export class GameEngine {
     canvas.removeEventListener('contextmenu', this.handleContextMenu);
     canvas.removeEventListener('touchstart', this.handleTouchStart);
     soundEngine.stopPeacefulMusic();
+    this.waterBumpTex?.dispose();
     this.materialPalette.dispose();
     this.renderer.dispose();
   }

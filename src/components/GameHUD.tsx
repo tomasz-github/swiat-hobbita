@@ -22,9 +22,10 @@ import {
   Sunrise,
   Footprints,
   Flame,
+  Clock,
 } from 'lucide-react';
 import { soundEngine } from '../game/audio';
-import { WORLD_LENGTH, getRoadCenter } from '../game/terrain';
+import { WORLD_LENGTH, LAKE_START_Z, LAKE_END_Z, getRoadCenter } from '../game/terrain';
 import type { CruisingGait } from '../game/engine';
 
 interface GameHUDProps {
@@ -51,6 +52,7 @@ interface GameHUDProps {
   onTriggerStarBurst: () => void;
   onToggleCamp: () => void;
   onOpenCampMenu: () => void;
+  onRestFourHours: () => void;
   onFeedApple: () => void;
   onCycleCamera: () => void;
   onOpenMap: () => void;
@@ -82,6 +84,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   onTriggerStarBurst,
   onToggleCamp,
   onOpenCampMenu,
+  onRestFourHours,
   onFeedApple,
   onCycleCamera,
   onOpenMap,
@@ -128,6 +131,41 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     // Coordinate mapping relative to player
     // 1 pixel = 1.2 world units
     const mapScale = 0.55;
+
+    // Draw Długie Jezioro (Long Lake) & City of Dale when near z: 1520..2020
+    const lakeZMin = Math.max(LAKE_START_Z, playerPos.z - 90);
+    const lakeZMax = Math.min(LAKE_END_Z, playerPos.z + 90);
+    if (lakeZMax > lakeZMin) {
+      ctx.fillStyle = timeOfDay > 0.82 || timeOfDay < 0.15 ? '#163d5c' : '#256c8f';
+      ctx.beginPath();
+      for (let z = lakeZMin; z <= lakeZMax; z += 4) {
+        const rx = getRoadCenter(z) + 5;
+        const sx = center + (rx - playerPos.x) * mapScale;
+        const sy = center - (z - playerPos.z) * mapScale;
+        if (z === lakeZMin) ctx.moveTo(sx, sy);
+        else ctx.lineTo(sx, sy);
+      }
+      for (let z = lakeZMax; z >= lakeZMin; z -= 4) {
+        const rx = getRoadCenter(z) + 92;
+        const sx = center + (rx - playerPos.x) * mapScale;
+        const sy = center - (z - playerPos.z) * mapScale;
+        ctx.lineTo(sx, sy);
+      }
+      ctx.closePath();
+      ctx.fill();
+
+      // City of Dale icon across the water
+      const daleX = getRoadCenter(1770) + 46;
+      const dmx = center + (daleX - playerPos.x) * mapScale;
+      const dmy = center - (1770 - playerPos.z) * mapScale;
+      if (Math.hypot(dmx - center, dmy - center) < radius - 4) {
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillRect(dmx - 5, dmy - 7, 10, 14);
+        ctx.strokeStyle = '#fef08a';
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(dmx - 5, dmy - 7, 10, 14);
+      }
+    }
 
     // Draw winding road
     ctx.strokeStyle = '#c4ab80';
@@ -183,8 +221,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     });
 
     // Draw Lonely Mountain Beacon indicator at top of map
-    const lmx = center + (getRoadCenter(1850) - playerPos.x) * mapScale;
-    const lmy = center - (1850 - playerPos.z) * mapScale;
+    const lmx = center + (getRoadCenter(2380) - playerPos.x) * mapScale;
+    const lmy = center - (2380 - playerPos.z) * mapScale;
     if (Math.hypot(lmx - center, lmy - center) < radius - 8) {
       ctx.fillStyle = '#fbbf24';
       ctx.beginPath();
@@ -238,8 +276,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   // Biome determination
   let currentBiome = 'Zielone Wzgórza Hobbitów';
   if (playerPos.z > 400 && playerPos.z < 900) currentBiome = 'Leśne Ostępy';
-  else if (playerPos.z >= 900 && playerPos.z < 1500) currentBiome = 'Wąwóz Mglistych Gór';
-  else if (playerPos.z >= 1500) currentBiome = 'Podnóże Samotnej Góry';
+  else if (playerPos.z >= 900 && playerPos.z < 1520) currentBiome = 'Wąwóz Mglistych Gór';
+  else if (playerPos.z >= 1520 && playerPos.z < 2020) currentBiome = 'Brzeg Długiego Jeziora · Dale';
+  else if (playerPos.z >= 2020) currentBiome = 'Podnóże Samotnej Góry';
 
   const progressPercent = Math.min(100, Math.round((playerPos.z / WORLD_LENGTH) * 100));
 
@@ -558,16 +597,26 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 </span>
               </button>
 
-              {/* Open Camp Sleep/Tea Menu when camped */}
+              {/* Open Camp Sleep/Tea Menu & Quick 4h Rest when camped */}
               {isCamped && (
-                <button
-                  onClick={onOpenCampMenu}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-orange-700 hover:bg-orange-600 text-white rounded-xl text-xs font-semibold shadow border border-orange-400/50 transition active:scale-95"
-                  title="Prześpij noc do świtu lub zaparz herbatę przy ognisku"
-                >
-                  <Flame className="w-4 h-4 text-yellow-300" />
-                  <span>Nocuj do świtu</span>
-                </button>
+                <>
+                  <button
+                    onClick={onRestFourHours}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-indigo-700 hover:bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow border border-indigo-400/50 transition active:scale-95"
+                    title="Odpocznij 4 godziny w rozbitym obozie (+4h czasu, 100% energii)"
+                  >
+                    <Clock className="w-4 h-4 text-amber-300" />
+                    <span>Odpocznij 4h</span>
+                  </button>
+                  <button
+                    onClick={onOpenCampMenu}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-orange-700 hover:bg-orange-600 text-white rounded-xl text-xs font-semibold shadow border border-orange-400/50 transition active:scale-95"
+                    title="Prześpij noc do świtu lub zaparz herbatę przy ognisku"
+                  >
+                    <Flame className="w-4 h-4 text-yellow-300" />
+                    <span>Nocuj do świtu</span>
+                  </button>
+                </>
               )}
 
               {/* Star Burst Defend */}

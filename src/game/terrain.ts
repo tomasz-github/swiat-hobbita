@@ -2,8 +2,11 @@ import * as THREE from 'three';
 import { WorldMilestone } from './types';
 import { createGroundDetailTexture, createGroundBumpTexture, createStoneTexture } from './materials';
 
-export const WORLD_LENGTH = 1900;
+export const WORLD_LENGTH = 2450;
 export const WORLD_WIDTH = 280;
+export const LAKE_START_Z = 1520;
+export const LAKE_END_Z = 2020;
+export const LAKE_WATER_Y = 16.0;
 
 // Milestone definitions from Shire to Lonely Mountain
 export const WORLD_MILESTONES: WorldMilestone[] = [
@@ -44,14 +47,22 @@ export const WORLD_MILESTONES: WorldMilestone[] = [
     name: 'Górska Przystań Kucyków',
     biome: 'Górskie Przełęcze',
     zPos: 1350,
-    description: 'Ostatnie schronienie przed szczytem. Zapas chrupiących jabłek i ciepły żłób.',
+    description: 'Ostatnie schronienie przed zejściem nad jezioro. Zapas chrupiących jabłek i ciepły żłób.',
+    visited: false,
+  },
+  {
+    id: 'lake_dale',
+    name: 'Jezioro Długie i Miasto Dale',
+    biome: 'Brzeg Długiego Jeziora',
+    zPos: 1750,
+    description: 'Błękitna tafla Długiego Jeziora i drewniane miasto Dale na palach nad wodą — widok prowadzący wprost pod Samotną Górę.',
     visited: false,
   },
   {
     id: 'lonely_mountain',
     name: 'Wrota Samotnej Góry (Erebor)',
     biome: 'Samotna Góra',
-    zPos: 1850,
+    zPos: 2380,
     description: 'Cel podróży! Majestatyczna góra krasnoludów kąpiąca się w złotym blasku gwiazd.',
     visited: false,
   },
@@ -76,8 +87,10 @@ export function getMountainTrailElevation(z: number): number {
   if (z <= 820) return 0;
   if (z < 940) return smoothstep(820, 940, z) * 16.0;
   if (z <= 1460) return 16.0 + ((z - 940) / 520) * 6.0;
-  if (z <= 1560) return 22.0 + smoothstep(1460, 1560, z) * 3.0;
-  return 25.0 + (z - 1560) * 0.045;
+  if (z <= 1550) return 22.0 - smoothstep(1460, 1550, z) * 4.0;
+  if (z <= 2010) return 18.0; // Level lakeshore road overlooking Długie Jezioro (water at 16.0)
+  if (z <= 2120) return 18.0 + smoothstep(2010, 2120, z) * 7.0;
+  return 25.0 + (z - 2120) * 0.05;
 }
 
 // Procedural Height Function
@@ -86,8 +99,9 @@ export function getTerrainHeight(x: number, z: number): number {
   const signedOffset = x - roadX;
   const distToRoad = Math.abs(signedOffset);
 
-  // Smooth mask for the Misty Mountains pass (z: 840..1540)
+  // Smooth masks for Misty Mountains (z: 840..1540) and Długie Jezioro & Dale (z: 1515..2025)
   const mountainWeight = smoothstep(840, 930, z) * (1 - smoothstep(1450, 1540, z));
+  const lakeWeight = smoothstep(1515, 1560, z) * (1 - smoothstep(1980, 2025, z));
   const trailElev = getMountainTrailElevation(z);
 
   // Wide gentle meadows & forest outside the mountains
@@ -165,6 +179,26 @@ export function getTerrainHeight(x: number, z: number): number {
     baseHeight = THREE.MathUtils.lerp(openHeight, mountainHeight, mountainWeight);
   }
 
+  // Long Lake & Dale shoreline (z: 1515..2025): road travels along the western shore while lake opens on +X
+  if (lakeWeight > 0.001) {
+    let lakeTerrainY = trailElev;
+    if (signedOffset > 4.2) {
+      const shoreDrop = smoothstep(4.2, 13.0, signedOffset) * 6.8;
+      const lakebedRipple = (Math.sin(x * 0.12) * Math.cos(z * 0.1) * 0.32) * smoothstep(8, 18, signedOffset);
+      const farShoreRise =
+        smoothstep(86, 102, signedOffset) * 10.5 +
+        Math.max(0, signedOffset - 98) * 0.42;
+      lakeTerrainY = trailElev - shoreDrop + lakebedRipple + farShoreRise;
+    } else {
+      // Western shore hills always stay comfortably above water level (16.0)
+      const westDist = Math.max(0, -signedOffset - 4.8);
+      const hillRoll = Math.max(0, Math.sin(x * 0.045) * 2.6 + Math.cos(z * 0.038) * 2.1 + 1.2);
+      const slopeUp = Math.pow(westDist * 0.16, 1.35);
+      lakeTerrainY = trailElev + (hillRoll + slopeUp) * smoothstep(0, 10, westDist);
+    }
+    baseHeight = THREE.MathUtils.lerp(baseHeight, lakeTerrainY, lakeWeight);
+  }
+
   // Soft outer world boundary hills beyond the wide meadows
   const edgeDist = Math.max(0, Math.abs(x) - WORLD_WIDTH * 0.44);
   if (edgeDist > 0) {
@@ -177,7 +211,7 @@ export function getTerrainHeight(x: number, z: number): number {
 // Smooth high-resolution terrain geometry with detail + bump textures and biome vertex shading
 export function createWorldTerrain(maxAnisotropy = 4): THREE.Mesh {
   const segmentsX = 200;
-  const segmentsZ = 420;
+  const segmentsZ = 520;
   const geo = new THREE.PlaneGeometry(WORLD_WIDTH, WORLD_LENGTH, segmentsX, segmentsZ);
   geo.rotateX(-Math.PI / 2);
 
@@ -192,6 +226,9 @@ export function createWorldTerrain(maxAnisotropy = 4): THREE.Mesh {
   const colMountainRock = new THREE.Color(0x636872);
   const colMountainChasm = new THREE.Color(0x353b45);
   const colMountainSnow = new THREE.Color(0xe5edf5);
+  const colLakeGrass = new THREE.Color(0x477d49);
+  const colLakeSand = new THREE.Color(0xb39f7d);
+  const colLakeBed = new THREE.Color(0x28434e);
   const colLonelyRock = new THREE.Color(0x494c54);
   const colLonelyGold = new THREE.Color(0x9b7e3c);
 
@@ -210,6 +247,7 @@ export function createWorldTerrain(maxAnisotropy = 4): THREE.Mesh {
     const roadX = getRoadCenter(z);
     const distToRoad = Math.abs(x - roadX);
     const inMountains = z >= 870 && z <= 1520;
+    const inLakeZone = z > LAKE_START_Z && z < LAKE_END_Z;
     const roadHalfWidth = inMountains ? 2.4 : 4.2;
     const shoulderHalfWidth = inMountains ? 3.2 : 5.8;
     const isRoad = distToRoad < roadHalfWidth;
@@ -232,7 +270,7 @@ export function createWorldTerrain(maxAnisotropy = 4): THREE.Mesh {
       } else {
         tempCol.copy(colGrassShire).lerp(colForestFloor, blend).lerp(colRoadShoulder, patchWave * 0.18);
       }
-    } else if (z <= 1520) {
+    } else if (z <= LAKE_START_Z) {
       const trailY = getMountainTrailElevation(z);
       if (y < trailY - 2.0) {
         const depthT = Math.min(1, (trailY - y) / 18);
@@ -245,8 +283,19 @@ export function createWorldTerrain(maxAnisotropy = 4): THREE.Mesh {
           tempCol.copy(colMountainRock).lerp(colMountainSnow, snowBlend);
         }
       }
+    } else if (inLakeZone) {
+      if (y < LAKE_WATER_Y - 0.5) {
+        const depthT = Math.min(1, (LAKE_WATER_Y - y) / 4.5);
+        tempCol.copy(colLakeSand).lerp(colLakeBed, depthT);
+      } else if (y < LAKE_WATER_Y + 0.85) {
+        tempCol.copy(colLakeSand);
+      } else if (isRoad) {
+        tempCol.copy(colRoadShire).lerp(colLakeSand, 0.45);
+      } else {
+        tempCol.copy(colLakeGrass).lerp(colMountainRock, patchWave * 0.28);
+      }
     } else {
-      const goldGlow = (z - 1520) / 380;
+      const goldGlow = Math.min(1, (z - LAKE_END_Z) / 410);
       if (isRoad) {
         tempCol.copy(colRoadShire).lerp(colLonelyGold, 0.45);
       } else {
@@ -355,7 +404,7 @@ export function createInstancedFlora(): THREE.Group {
 
 // Instanced displaced craggy boulders & stone-textured rocks
 export function createInstancedRocks(maxAnisotropy = 4): THREE.InstancedMesh {
-  const count = 340;
+  const count = 420;
   const rockGeo = new THREE.IcosahedronGeometry(0.95, 1);
   const pos = rockGeo.attributes.position;
   const v = new THREE.Vector3();
@@ -389,6 +438,7 @@ export function createInstancedRocks(maxAnisotropy = 4): THREE.InstancedMesh {
     const z = 40 + (i / count) * (WORLD_LENGTH - 90);
     const roadX = getRoadCenter(z);
     const inMountains = z >= 880 && z <= 1520;
+    const inLakeZone = z > LAKE_START_Z && z < LAKE_END_Z;
     let x: number;
     if (inMountains) {
       // Cluster boulders along the cliff-wall base & chasm rim, keeping the narrow trail clear
@@ -397,6 +447,13 @@ export function createInstancedRocks(maxAnisotropy = 4): THREE.InstancedMesh {
       const side = onWall ? -cliffSign : cliffSign;
       const offset = onWall ? 3.2 + Math.random() * 16 : 2.6 + Math.random() * 1.4;
       x = roadX + side * offset;
+    } else if (inLakeZone) {
+      // Place shoreline boulders along the western hillside or hugging the rocky water edge
+      if (i % 4 === 0) {
+        x = roadX + 5.6 + Math.random() * 1.6;
+      } else {
+        x = roadX - (6.8 + Math.random() * 58);
+      }
     } else {
       const side = i % 2 === 0 ? 1 : -1;
       x = roadX + side * (6.5 + Math.random() * 78);

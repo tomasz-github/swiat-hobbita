@@ -3162,3 +3162,386 @@ export function createThicketBush(palette?: MaterialPalette): THREE.Group {
   return group;
 }
 
+// Wooden Stilt City of Dale / Esgaroth on the Long Lake (batched via optimizeStaticGroup for 60 FPS)
+export function createDaleLakeCity(palette?: MaterialPalette): THREE.Group {
+  const group = new THREE.Group();
+
+  const darkWoodMat = new THREE.MeshStandardMaterial({
+    color: 0x3f291a,
+    map: palette?.woodTex,
+    roughness: 0.85,
+  });
+  const plankWoodMat = new THREE.MeshStandardMaterial({
+    color: 0x62422b,
+    map: palette?.woodTex,
+    roughness: 0.78,
+  });
+  const plasterMat = new THREE.MeshStandardMaterial({
+    color: 0xdccbb0,
+    roughness: 0.86,
+  });
+  const slateRoofMat = new THREE.MeshStandardMaterial({
+    color: 0x33475b,
+    map: palette?.stoneTex,
+    roughness: 0.72,
+  });
+  const warmRoofMat = new THREE.MeshStandardMaterial({
+    color: 0x763b28,
+    map: palette?.woodTex,
+    roughness: 0.76,
+  });
+  const tealRoofMat = new THREE.MeshStandardMaterial({
+    color: 0x2b504a,
+    map: palette?.woodTex,
+    roughness: 0.76,
+  });
+  const stoneMat = new THREE.MeshStandardMaterial({
+    color: 0x6c7278,
+    map: palette?.stoneTex,
+    roughness: 0.9,
+  });
+  const glowWindowMat = new THREE.MeshStandardMaterial({
+    color: 0xffe89e,
+    emissive: 0xffa629,
+    emissiveIntensity: 1.55,
+    roughness: 0.2,
+  });
+  const goldAccentMat = new THREE.MeshStandardMaterial({
+    color: 0xf5b942,
+    emissive: 0x92400e,
+    emissiveIntensity: 0.4,
+    roughness: 0.28,
+    metalness: 0.82,
+  });
+  const smokeMat = new THREE.MeshStandardMaterial({
+    color: 0xe2e8f0,
+    transparent: true,
+    opacity: 0.35,
+    roughness: 1.0,
+  });
+
+  // 1. Timber Boardwalk Platforms raised above lake level (+0.95) with underwater stilt pilings
+  const platforms = [
+    { x: 0, z: 0, w: 30, d: 36 },     // Central Great Hall Square
+    { x: -1, z: -38, w: 25, d: 30 },  // North Merchant Quarter
+    { x: 1, z: 38, w: 26, d: 30 },    // South Harbor Quarter
+    { x: -13, z: -18, w: 10, d: 14 }, // Waterfront Fishermen Jetty
+    { x: -13, z: 18, w: 10, d: 14 },  // Waterfront Dock Jetty
+  ];
+
+  platforms.forEach((p) => {
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(p.w, 0.55, p.d), plankWoodMat);
+    deck.position.set(p.x, 0.95, p.z);
+    deck.castShadow = true;
+    deck.receiveShadow = true;
+    group.add(deck);
+
+    // Timber pilings extending deep into lakebed (-5.5 to +1.0)
+    const stepX = 5.5;
+    const stepZ = 6.0;
+    for (let px = -p.w / 2 + 1.2; px <= p.w / 2 - 1.2; px += stepX) {
+      for (let pz = -p.d / 2 + 1.2; pz <= p.d / 2 - 1.2; pz += stepZ) {
+        const piling = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.36, 6.6, 6), darkWoodMat);
+        piling.position.set(p.x + px, -2.3, p.z + pz);
+        group.add(piling);
+      }
+    }
+  });
+
+  // 2. Arched Wooden Bridges connecting city islands & canals
+  [
+    { x: -2, z: -20.5, len: 9.0 },
+    { x: 1, z: 20.5, len: 9.0 },
+  ].forEach((br) => {
+    const span = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.35, br.len), plankWoodMat);
+    span.position.set(br.x, 1.55, br.z);
+    span.castShadow = true;
+    group.add(span);
+
+    [-1.95, 1.95].forEach((rx) => {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.7, br.len), darkWoodMat);
+      rail.position.set(br.x + rx, 2.05, br.z);
+      group.add(rail);
+    });
+  });
+
+  // Helper to build a Nordic / Middle-earth timber & stone stilt house
+  const addDaleBuilding = (
+    bx: number,
+    bz: number,
+    w: number,
+    h: number,
+    d: number,
+    roofH: number,
+    roofMat: THREE.Material,
+    hasChimney = true,
+    rotY = 0
+  ) => {
+    const bGroup = new THREE.Group();
+    bGroup.position.set(bx, 1.22, bz);
+    bGroup.rotation.y = rotY;
+
+    // Lower timber story
+    const lowerH = h * 0.52;
+    const lower = new THREE.Mesh(new THREE.BoxGeometry(w, lowerH, d), darkWoodMat);
+    lower.position.y = lowerH / 2;
+    lower.castShadow = true;
+    lower.receiveShadow = true;
+    bGroup.add(lower);
+
+    // Slightly overhanging upper plaster & half-timbered story
+    const upperH = h * 0.48;
+    const upper = new THREE.Mesh(new THREE.BoxGeometry(w * 1.07, upperH, d * 1.07), plasterMat);
+    upper.position.y = lowerH + upperH / 2;
+    upper.castShadow = true;
+    upper.receiveShadow = true;
+    bGroup.add(upper);
+
+    // Timber corner posts & floor belt beam
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(w * 1.1, 0.25, d * 1.1), darkWoodMat);
+    belt.position.y = lowerH;
+    bGroup.add(belt);
+
+    // Steep pitched roof
+    const rShape = new THREE.Shape();
+    rShape.moveTo(-w * 0.62, 0);
+    rShape.lineTo(0, roofH);
+    rShape.lineTo(w * 0.62, 0);
+    rShape.closePath();
+    const rGeo = new THREE.ExtrudeGeometry(rShape, { depth: d * 1.18, bevelEnabled: false });
+    rGeo.translate(0, 0, -(d * 1.18) / 2);
+    const roof = new THREE.Mesh(rGeo, roofMat);
+    roof.position.y = h;
+    roof.castShadow = true;
+    roof.receiveShadow = true;
+    bGroup.add(roof);
+
+    // Glowing windows on both +X/-X (lakeside road view!) and +/-Z faces
+    [-1, 1].forEach((side) => {
+      const winCount = Math.max(1, Math.floor(d / 3.2));
+      for (let wi = 0; wi < winCount; wi++) {
+        const wz = (wi - (winCount - 1) / 2) * 2.4;
+        const winLow = new THREE.Mesh(new THREE.PlaneGeometry(0.75, 0.95), glowWindowMat);
+        winLow.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+        winLow.position.set(side * (w / 2 + 0.03), lowerH * 0.55, wz);
+        bGroup.add(winLow);
+
+        const winUp = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 1.05), glowWindowMat);
+        winUp.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+        winUp.position.set(side * ((w * 1.07) / 2 + 0.03), lowerH + upperH * 0.52, wz);
+        bGroup.add(winUp);
+      }
+    });
+
+    [-1, 1].forEach((end) => {
+      const endWin = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 1.1), glowWindowMat);
+      endWin.rotation.y = end > 0 ? 0 : Math.PI;
+      endWin.position.set(0, lowerH + upperH * 0.52, end * ((d * 1.07) / 2 + 0.03));
+      bGroup.add(endWin);
+    });
+
+    if (hasChimney) {
+      const ch = new THREE.Mesh(new THREE.BoxGeometry(0.75, roofH + 1.6, 0.75), stoneMat);
+      ch.position.set(w * 0.25, h + roofH * 0.45, d * 0.2);
+      bGroup.add(ch);
+      for (let s = 0; s < 2; s++) {
+        const puff = new THREE.Mesh(new THREE.SphereGeometry(0.32 + s * 0.14, 7, 6), smokeMat);
+        puff.position.set(w * 0.25 + s * 0.2, h + roofH + 1.4 + s * 0.7, d * 0.2);
+        bGroup.add(puff);
+      }
+    }
+
+    group.add(bGroup);
+  };
+
+  // 3. Populate Dale Town Districts (20 varied buildings facing waterfront & road)
+  const cityBuildings: Array<[number, number, number, number, number, number, THREE.Material, boolean, number]> = [
+    // Central Square around Great Hall
+    [-8, -10, 4.8, 5.4, 6.2, 3.6, slateRoofMat, true, 0],
+    [-8, 9, 4.6, 5.0, 5.8, 3.4, warmRoofMat, true, 0],
+    [7, -11, 5.4, 6.2, 6.8, 4.0, tealRoofMat, true, 0],
+    [8, 10, 5.2, 5.8, 6.4, 3.8, slateRoofMat, true, 0],
+    [10, 0, 5.0, 6.5, 7.2, 4.2, warmRoofMat, true, 0],
+    // North Quarter
+    [-7, -30, 4.4, 4.8, 5.6, 3.2, warmRoofMat, true, 0.15],
+    [-6, -44, 5.0, 5.6, 6.4, 3.6, slateRoofMat, false, -0.1],
+    [5, -31, 5.2, 5.5, 6.6, 3.8, slateRoofMat, true, 0],
+    [5, -45, 4.8, 6.0, 6.0, 3.5, tealRoofMat, true, 0.2],
+    [-1, -38, 4.2, 4.4, 4.8, 3.0, warmRoofMat, false, Math.PI / 2],
+    // South Harbor Quarter
+    [-7, 30, 4.5, 5.0, 5.8, 3.4, tealRoofMat, true, -0.12],
+    [-6, 44, 5.2, 5.8, 6.5, 3.8, warmRoofMat, true, 0.1],
+    [6, 31, 5.0, 5.4, 6.2, 3.5, slateRoofMat, true, 0],
+    [6, 45, 4.8, 6.2, 6.0, 3.8, warmRoofMat, false, -0.15],
+    [0, 38, 4.2, 4.6, 5.0, 3.1, slateRoofMat, true, Math.PI / 2],
+    // Waterfront Jetties
+    [-13.5, -18, 3.8, 3.8, 4.5, 2.8, slateRoofMat, false, 0],
+    [-13.5, 18, 3.8, 4.0, 4.6, 2.8, warmRoofMat, true, 0],
+  ];
+
+  cityBuildings.forEach((b) => addDaleBuilding(...b));
+
+  // 4. Grand Master Hall & Bell Tower in the center (visible from far along the road!)
+  const hallBase = new THREE.Mesh(new THREE.BoxGeometry(7.2, 2.4, 9.6), stoneMat);
+  hallBase.position.set(-1.0, 2.4, 0);
+  hallBase.castShadow = true;
+  group.add(hallBase);
+
+  const hallBody = new THREE.Mesh(new THREE.BoxGeometry(6.8, 5.8, 9.2), plasterMat);
+  hallBody.position.set(-1.0, 6.5, 0);
+  hallBody.castShadow = true;
+  group.add(hallBody);
+
+  const hallRoofShape = new THREE.Shape();
+  hallRoofShape.moveTo(-4.3, 0);
+  hallRoofShape.lineTo(0, 4.8);
+  hallRoofShape.lineTo(4.3, 0);
+  hallRoofShape.closePath();
+  const hallRoofGeo = new THREE.ExtrudeGeometry(hallRoofShape, { depth: 10.4, bevelEnabled: false });
+  hallRoofGeo.translate(0, 0, -5.2);
+  const hallRoof = new THREE.Mesh(hallRoofGeo, slateRoofMat);
+  hallRoof.position.set(-1.0, 9.4, 0);
+  hallRoof.castShadow = true;
+  group.add(hallRoof);
+
+  // Bell / Watch Tower rising above the Great Hall
+  const towerShaft = new THREE.Mesh(new THREE.BoxGeometry(3.8, 13.5, 3.8), darkWoodMat);
+  towerShaft.position.set(-1.0, 8.0, 0);
+  towerShaft.castShadow = true;
+  group.add(towerShaft);
+
+  const belfryGlow = new THREE.Mesh(new THREE.BoxGeometry(2.8, 2.2, 2.8), glowWindowMat);
+  belfryGlow.position.set(-1.0, 15.6, 0);
+  group.add(belfryGlow);
+
+  const towerSpire = new THREE.Mesh(new THREE.ConeGeometry(3.1, 5.5, 4), slateRoofMat);
+  towerSpire.rotation.y = Math.PI / 4;
+  towerSpire.position.set(-1.0, 19.3, 0);
+  towerSpire.castShadow = true;
+  group.add(towerSpire);
+
+  const spireFinial = new THREE.Mesh(new THREE.OctahedronGeometry(0.65, 0), goldAccentMat);
+  spireFinial.position.set(-1.0, 22.3, 0);
+  group.add(spireFinial);
+
+  // Great Hall side glowing arch windows
+  [-2.6, 0, 2.6].forEach((wz) => {
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 2.2), glowWindowMat);
+    win.rotation.y = -Math.PI / 2;
+    win.position.set(-4.45, 6.2, wz);
+    group.add(win);
+  });
+
+  // 5. Harbor Lantern Posts along the waterfront decks
+  [
+    { x: -14.2, z: -12.5 },
+    { x: -14.2, z: 0 },
+    { x: -14.2, z: 12.5 },
+    { x: -12.2, z: -36 },
+    { x: -12.2, z: 36 },
+  ].forEach((lp) => {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.14, 3.2, 6), darkWoodMat);
+    post.position.set(lp.x, 2.8, lp.z);
+    const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 6), glowWindowMat);
+    lamp.position.set(lp.x, 4.5, lp.z);
+    group.add(post, lamp);
+  });
+
+  // 6. Moored Wooden River Boats & Barges floating beside Dale piers (local y = 0)
+  [
+    { x: -19.2, z: -16, rot: 0.12, scale: 1.15 },
+    { x: -18.8, z: 16, rot: -0.22, scale: 1.0 },
+    { x: -16.8, z: -34, rot: 0.35, scale: 0.95 },
+    { x: -16.6, z: 35, rot: -0.18, scale: 1.1 },
+    { x: -9.0, z: -20.5, rot: Math.PI / 2 + 0.1, scale: 0.85 },
+  ].forEach((bt) => {
+    const hull = new THREE.Mesh(new THREE.CylinderGeometry(0.65 * bt.scale, 1.05 * bt.scale, 4.4 * bt.scale, 7), plankWoodMat);
+    hull.rotation.x = Math.PI / 2;
+    hull.scale.set(0.75, 1, 0.45);
+    hull.position.set(bt.x, 0.08, bt.z);
+    hull.rotation.y = bt.rot;
+    hull.castShadow = true;
+
+    const bowMast = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 2.6 * bt.scale, 6), darkWoodMat);
+    bowMast.position.set(bt.x, 1.35 * bt.scale, bt.z);
+    const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.16, 6, 6), glowWindowMat);
+    lantern.position.set(bt.x, 2.4 * bt.scale, bt.z);
+    group.add(hull, bowMast, lantern);
+  });
+
+  // Warm ambient PointLights so Dale casts golden light across the dark lake at night
+  const centerLight = new THREE.PointLight(0xffb44c, 4.2, 68);
+  centerLight.position.set(-10, 8, 0);
+  const northLight = new THREE.PointLight(0xffaa3c, 3.2, 54);
+  northLight.position.set(-8, 6, -34);
+  const southLight = new THREE.PointLight(0xffaa3c, 3.2, 54);
+  southLight.position.set(-8, 6, 34);
+  group.add(centerLight, northLight, southLight);
+
+  return optimizeStaticGroup(group);
+}
+
+// Scenic Lakeshore Harbor Viewing Pier (projects out from western shore road toward Dale)
+export function createLakeshorePier(palette?: MaterialPalette): THREE.Group {
+  const group = new THREE.Group();
+  const darkWoodMat = new THREE.MeshStandardMaterial({
+    color: 0x452b19,
+    map: palette?.woodTex,
+    roughness: 0.82,
+  });
+  const plankMat = new THREE.MeshStandardMaterial({
+    color: 0x6b472d,
+    map: palette?.woodTex,
+    roughness: 0.75,
+  });
+  const glowMat = new THREE.MeshStandardMaterial({
+    color: 0xffe484,
+    emissive: 0xffaa22,
+    emissiveIntensity: 2.0,
+  });
+
+  // Pier deck at local y = 0 (placed flush with shore road at y = 18.0)
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(9.0, 0.35, 3.8), plankMat);
+  deck.position.set(4.5, 0, 0);
+  deck.castShadow = true;
+  deck.receiveShadow = true;
+  group.add(deck);
+
+  // Pilings sinking down below water (local y = -6.5 to +1.0)
+  [1.2, 4.5, 8.2].forEach((px) => {
+    [-1.65, 1.65].forEach((pz) => {
+      const piling = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 7.2, 7), darkWoodMat);
+      piling.position.set(px, -2.5, pz);
+      piling.castShadow = true;
+      group.add(piling);
+    });
+  });
+
+  // Side railings + end barrier rail
+  [-1.65, 1.65].forEach((pz) => {
+    const topRail = new THREE.Mesh(new THREE.BoxGeometry(8.2, 0.14, 0.14), darkWoodMat);
+    topRail.position.set(4.6, 0.95, pz);
+    group.add(topRail);
+  });
+  const endRail = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 3.5), darkWoodMat);
+  endRail.position.set(8.2, 0.95, 0);
+  group.add(endRail);
+
+  // Glowing pier lantern at water tip
+  const lanternPost = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 2.4, 7), darkWoodMat);
+  lanternPost.position.set(8.2, 1.8, -1.65);
+  const lanternBulb = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8), glowMat);
+  lanternBulb.position.set(8.2, 3.05, -1.65);
+  group.add(lanternPost, lanternBulb);
+
+  // Moored wooden boat floating beside the pier (y = -2.0 corresponds to lake surface 16.0!)
+  const boatHull = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.85, 3.4, 7), plankMat);
+  boatHull.rotation.x = Math.PI / 2;
+  boatHull.scale.set(0.85, 1, 0.48);
+  boatHull.position.set(6.8, -1.9, 2.8);
+  boatHull.rotation.y = 0.25;
+  group.add(boatHull);
+
+  return optimizeStaticGroup(group);
+}
+
