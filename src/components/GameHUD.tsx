@@ -23,6 +23,7 @@ import {
   Footprints,
   Flame,
   Clock,
+  ArrowUp,
 } from 'lucide-react';
 import { soundEngine } from '../game/audio';
 import { WORLD_LENGTH, LAKE_START_Z, LAKE_END_Z, getRoadCenter } from '../game/terrain';
@@ -58,6 +59,7 @@ interface GameHUDProps {
   onOpenMap: () => void;
   onOpenCreator: () => void;
   onMobileJoystickMove?: (forward: number, turn: number) => void;
+  onMobileJump?: () => void;
 }
 
 export const GameHUD: React.FC<GameHUDProps> = ({
@@ -90,6 +92,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   onOpenMap,
   onOpenCreator,
   onMobileJoystickMove,
+  onMobileJump,
 }) => {
   const [dockCollapsed, setDockCollapsed] = useState(false);
   const [muted, setMuted] = useState(soundEngine.getMuted());
@@ -97,8 +100,23 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
   // Mobile virtual joystick touch handling
   const joystickContainerRef = useRef<HTMLDivElement | null>(null);
+  const joystickTouchIdRef = useRef<number | null>(null);
   const [touchActive, setTouchActive] = useState(false);
   const [touchPos, setTouchPos] = useState({ x: 0, y: 0 });
+  const [isTouchDevice, setIsTouchDevice] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      'ontouchstart' in window ||
+      navigator.maxTouchPoints > 0 ||
+      window.matchMedia?.('(pointer: coarse)').matches
+    );
+  });
+
+  useEffect(() => {
+    const onFirstTouch = () => setIsTouchDevice(true);
+    window.addEventListener('touchstart', onFirstTouch, { once: true, passive: true });
+    return () => window.removeEventListener('touchstart', onFirstTouch);
+  }, []);
 
   const handleToggleMute = () => {
     const isMuted = soundEngine.toggleMute();
@@ -290,35 +308,66 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     return <Moon className="w-4 h-4 text-indigo-300" />;
   };
 
-  // Virtual Joystick touch listeners for mobile
+  // Virtual Joystick touch listeners for mobile (supports multi-touch alongside camera drag)
+  const clampJoystickDelta = (rawX: number, rawY: number) => {
+    const maxDist = 45;
+    const dist = Math.hypot(rawX, rawY);
+    if (dist > maxDist) {
+      return { x: (rawX / dist) * maxDist, y: (rawY / dist) * maxDist };
+    }
+    return { x: rawX, y: rawY };
+  };
+
   const handleTouchStart = (e: React.TouchEvent) => {
-    if (!joystickContainerRef.current) return;
+    e.stopPropagation();
+    if (!joystickContainerRef.current || joystickTouchIdRef.current !== null) return;
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+    joystickTouchIdRef.current = touch.identifier;
     const rect = joystickContainerRef.current.getBoundingClientRect();
-    const touch = e.touches[0];
-    const x = touch.clientX - (rect.left + rect.width / 2);
-    const y = touch.clientY - (rect.top + rect.height / 2);
+    const { x, y } = clampJoystickDelta(
+      touch.clientX - (rect.left + rect.width / 2),
+      touch.clientY - (rect.top + rect.height / 2)
+    );
     setTouchActive(true);
     setTouchPos({ x, y });
     updateMobileInput(x, y);
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
-    if (!touchActive || !joystickContainerRef.current) return;
-    const rect = joystickContainerRef.current.getBoundingClientRect();
-    const touch = e.touches[0];
-    const maxDist = 45;
-    let x = touch.clientX - (rect.left + rect.width / 2);
-    let y = touch.clientY - (rect.top + rect.height / 2);
-    const dist = Math.hypot(x, y);
-    if (dist > maxDist) {
-      x = (x / dist) * maxDist;
-      y = (y / dist) * maxDist;
+    e.stopPropagation();
+    if (!joystickContainerRef.current || joystickTouchIdRef.current === null) return;
+    let touch: React.Touch | null = null;
+    for (let i = 0; i < e.touches.length; i++) {
+      if (e.touches[i].identifier === joystickTouchIdRef.current) {
+        touch = e.touches[i];
+        break;
+      }
     }
+    if (!touch) return;
+    const rect = joystickContainerRef.current.getBoundingClientRect();
+    const { x, y } = clampJoystickDelta(
+      touch.clientX - (rect.left + rect.width / 2),
+      touch.clientY - (rect.top + rect.height / 2)
+    );
+    setTouchActive(true);
     setTouchPos({ x, y });
     updateMobileInput(x, y);
   };
 
-  const handleTouchEnd = () => {
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    e.stopPropagation();
+    if (joystickTouchIdRef.current !== null) {
+      let ended = false;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (e.changedTouches[i].identifier === joystickTouchIdRef.current) {
+          ended = true;
+          break;
+        }
+      }
+      if (!ended) return;
+    }
+    joystickTouchIdRef.current = null;
     setTouchActive(false);
     setTouchPos({ x: 0, y: 0 });
     if (onMobileJoystickMove) onMobileJoystickMove(0, 0);
@@ -434,14 +483,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
       {/* BOTTOM SECTION */}
       <div className="w-full flex flex-col items-center">
-        {/* Mobile touch joystick (renders on small screens / touch) */}
-        <div className="w-full flex justify-between items-end mb-2 sm:hidden px-2">
+        {/* Mobile touch joystick (renders on touch devices in both portrait & landscape, and small screens) */}
+        <div className={`w-full flex justify-between items-end mb-2 px-2 ${isTouchDevice ? '' : 'sm:hidden'}`}>
           {/* Touch Joystick */}
           <div
             ref={joystickContainerRef}
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchEnd}
             className="pointer-events-auto w-24 h-24 rounded-full bg-stone-900/70 border-2 border-amber-500/40 relative flex items-center justify-center touch-none"
           >
             <div
@@ -455,6 +505,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
           {/* Quick Action Touch Buttons */}
           <div className="pointer-events-auto flex flex-col gap-2">
+            {!isDismounted && onMobileJump && (
+              <button
+                onClick={onMobileJump}
+                className="w-12 h-12 rounded-full bg-sky-600/90 border border-sky-300 text-white flex items-center justify-center shadow-lg active:scale-90"
+                title="Skok koniem"
+              >
+                <ArrowUp className="w-5 h-5" />
+              </button>
+            )}
             <button
               onClick={onTriggerStarBurst}
               className="w-12 h-12 rounded-full bg-indigo-600/90 border border-indigo-400 text-white flex items-center justify-center shadow-lg active:scale-90"

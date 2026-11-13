@@ -227,9 +227,13 @@ export class GameEngine {
   private cameraPitch: number = 0.18;
   private cameraYawOffset: number = 0;
   private isDraggingMouse: boolean = false;
+  private cameraTouchId: number | null = null;
   private lastMouseX: number = 0;
   private lastMouseY: number = 0;
   private cameraPreset: 'close' | 'standard' | 'cinematic' = 'standard';
+  private mobileForwardInput: number = 0;
+  private mobileTurnInput: number = 0;
+  private mobileJumpQueued: boolean = false;
 
   // Key states
   private keysHeld: Record<string, boolean> = {
@@ -970,6 +974,7 @@ export class GameEngine {
     canvas.addEventListener('touchstart', this.handleTouchStart, { passive: true });
     window.addEventListener('touchmove', this.handleTouchMove, { passive: true });
     window.addEventListener('touchend', this.handleTouchEnd);
+    window.addEventListener('touchcancel', this.handleTouchEnd);
   }
 
   private handleWindowBlur = () => {
@@ -977,6 +982,9 @@ export class GameEngine {
       this.keysHeld[k] = false;
     });
     this.isDraggingMouse = false;
+    this.cameraTouchId = null;
+    this.mobileForwardInput = 0;
+    this.mobileTurnInput = 0;
     this.renderer.domElement.style.cursor = 'grab';
   };
 
@@ -1054,26 +1062,47 @@ export class GameEngine {
   };
 
   private handleTouchStart = (e: TouchEvent) => {
-    if (e.touches.length === 1) {
+    if (this.cameraTouchId === null && e.changedTouches.length > 0) {
+      const t = e.changedTouches[0];
+      this.cameraTouchId = t.identifier;
       this.isDraggingMouse = true;
-      this.lastMouseX = e.touches[0].clientX;
-      this.lastMouseY = e.touches[0].clientY;
+      this.lastMouseX = t.clientX;
+      this.lastMouseY = t.clientY;
     }
   };
 
   private handleTouchMove = (e: TouchEvent) => {
-    if (!this.isDraggingMouse || e.touches.length === 0) return;
-    const dx = e.touches[0].clientX - this.lastMouseX;
-    const dy = e.touches[0].clientY - this.lastMouseY;
-    this.lastMouseX = e.touches[0].clientX;
-    this.lastMouseY = e.touches[0].clientY;
+    if (this.cameraTouchId === null) return;
+    let activeTouch: Touch | null = null;
+    for (let i = 0; i < e.touches.length; i++) {
+      if (e.touches[i].identifier === this.cameraTouchId) {
+        activeTouch = e.touches[i];
+        break;
+      }
+    }
+    if (!activeTouch) return;
+
+    const dx = activeTouch.clientX - this.lastMouseX;
+    const dy = activeTouch.clientY - this.lastMouseY;
+    this.lastMouseX = activeTouch.clientX;
+    this.lastMouseY = activeTouch.clientY;
 
     this.cameraYawOffset -= dx * 0.007;
     this.cameraPitch = Math.max(-0.78, Math.min(0.85, this.cameraPitch + dy * 0.005));
   };
 
-  private handleTouchEnd = () => {
-    this.isDraggingMouse = false;
+  private handleTouchEnd = (e: TouchEvent) => {
+    if (this.cameraTouchId === null) {
+      this.isDraggingMouse = false;
+      return;
+    }
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === this.cameraTouchId) {
+        this.cameraTouchId = null;
+        this.isDraggingMouse = false;
+        break;
+      }
+    }
   };
 
   private handleResize = () => {
@@ -1579,17 +1608,25 @@ export class GameEngine {
 
   private updateHorseLocomotion(dt: number) {
     this.idleTime += dt;
-    const forward = this.keysHeld.KeyW || this.keysHeld.ArrowUp;
-    const backward = this.keysHeld.KeyS || this.keysHeld.ArrowDown;
-    const left = this.keysHeld.KeyA || this.keysHeld.ArrowLeft;
-    const right = this.keysHeld.KeyD || this.keysHeld.ArrowRight;
+    const kbForward = this.keysHeld.KeyW || this.keysHeld.ArrowUp;
+    const kbBackward = this.keysHeld.KeyS || this.keysHeld.ArrowDown;
+    const kbLeft = this.keysHeld.KeyA || this.keysHeld.ArrowLeft;
+    const kbRight = this.keysHeld.KeyD || this.keysHeld.ArrowRight;
     const sprint = this.keysHeld.ShiftLeft || this.keysHeld.ShiftRight;
-    const jump = this.keysHeld.Space;
+    const jump = this.keysHeld.Space || this.mobileJumpQueued;
+    this.mobileJumpQueued = false;
 
-    // Turning
+    const forward = kbForward || this.mobileForwardInput > 0.12;
+    const backward = kbBackward || this.mobileForwardInput < -0.2;
+    const mobileSprint = this.mobileForwardInput > 0.85;
+
+    // Turning (keyboard + persistent mobile joystick)
     this.turnInput = 0;
-    if (left) this.turnInput += 1;
-    if (right) this.turnInput -= 1;
+    if (kbLeft) this.turnInput += 1;
+    if (kbRight) this.turnInput -= 1;
+    if (Math.abs(this.mobileTurnInput) > 0.08) {
+      this.turnInput = THREE.MathUtils.clamp(this.turnInput - this.mobileTurnInput, -1, 1);
+    }
 
     // ---------------------------------------------------
     // DISMOUNTED ON-FOOT MOVEMENT
@@ -1602,7 +1639,7 @@ export class GameEngine {
       // Walk on foot
       this.riderHeading += this.turnInput * 2.8 * dt;
       let targetFootSpeed = 0;
-      if (forward) targetFootSpeed = sprint ? 6.0 : 3.8;
+      if (forward) targetFootSpeed = sprint || mobileSprint ? 6.0 : 3.8;
       else if (backward) targetFootSpeed = -2.0;
 
       this.riderSpeed = THREE.MathUtils.damp(this.riderSpeed, targetFootSpeed, 10, dt);
@@ -1654,7 +1691,7 @@ export class GameEngine {
     this.horseHeading += this.turnInput * turnSpeed * dt;
 
     // Speeds: Stęp (Walk) ~ 4.2m/s, Kłus (Trot) ~ 7.5m/s, Galop (Canter) ~ 12.2m/s, Cwał (Gallop) ~ 17.5m/s
-    if (forward) {
+    if (kbForward) {
       if ((sprint || this.selectedGait === 'gallop') && this.stamina > 5) {
         this.targetSpeed = 17.5; // Cwał (Full Gallop)
         this.stamina = Math.max(0, this.stamina - 4.5 * dt);
@@ -1664,6 +1701,17 @@ export class GameEngine {
         this.targetSpeed = 7.5; // Kłus (Trot)
       } else {
         this.targetSpeed = 4.2; // Stęp (Walk)
+      }
+    } else if (this.mobileForwardInput > 0.12) {
+      if ((mobileSprint || this.selectedGait === 'gallop') && this.stamina > 5) {
+        this.targetSpeed = 17.5;
+        this.stamina = Math.max(0, this.stamina - 4.5 * dt);
+      } else if (this.mobileForwardInput > 0.5 || this.selectedGait === 'canter' || (mobileSprint && this.stamina <= 5)) {
+        this.targetSpeed = 12.2;
+      } else if (this.mobileForwardInput > 0.28 || this.selectedGait === 'trot') {
+        this.targetSpeed = 7.5;
+      } else {
+        this.targetSpeed = 4.2;
       }
     } else if (backward) {
       this.targetSpeed = -2.5; // Cofanie
@@ -2094,29 +2142,15 @@ export class GameEngine {
     }
   }
 
-  // Mobile virtual joystick control
+  // Mobile virtual joystick & jump controls
   public applyMobileInput(forwardRatio: number, turnRatio: number) {
-    this.turnInput = -turnRatio;
-    if (this.isDismounted) {
-      this.riderHeading += this.turnInput * 2.5 * 0.016;
-      this.riderSpeed = forwardRatio > 0.1 ? 3.8 : forwardRatio < -0.2 ? -2.0 : 0;
-      return;
-    }
+    this.mobileForwardInput = THREE.MathUtils.clamp(forwardRatio, -1, 1);
+    this.mobileTurnInput = THREE.MathUtils.clamp(turnRatio, -1, 1);
+  }
 
-    this.horseHeading += this.turnInput * 2.2 * 0.016;
-
-    if (forwardRatio > 0.1) {
-      if (forwardRatio > 0.85 && this.stamina > 5) {
-        this.targetSpeed = 17.5;
-      } else if (forwardRatio > 0.5) {
-        this.targetSpeed = 12.2;
-      } else {
-        this.targetSpeed = 7.5;
-      }
-    } else if (forwardRatio < -0.2) {
-      this.targetSpeed = -2.5;
-    } else {
-      this.targetSpeed = 0;
+  public triggerJump() {
+    if (!this.isDismounted && !this.isJumping) {
+      this.mobileJumpQueued = true;
     }
   }
 
@@ -2159,7 +2193,9 @@ export class GameEngine {
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('mousemove', this.handleMouseMove);
     window.removeEventListener('mouseup', this.handleMouseUp);
+    window.removeEventListener('touchmove', this.handleTouchMove);
     window.removeEventListener('touchend', this.handleTouchEnd);
+    window.removeEventListener('touchcancel', this.handleTouchEnd);
     const canvas = this.renderer.domElement;
     canvas.removeEventListener('mousedown', this.handleMouseDown);
     canvas.removeEventListener('dblclick', this.handleDoubleClick);

@@ -236,6 +236,12 @@ export default function App() {
     }
   };
 
+  const handleMobileJump = () => {
+    if (engineRef.current) {
+      engineRef.current.triggerJump();
+    }
+  };
+
   const handleRestartFromShire = () => {
     window.location.reload();
   };
@@ -290,6 +296,7 @@ export default function App() {
             onOpenMap={() => setShowWorldMap(true)}
             onOpenCreator={() => setShowCreator(true)}
             onMobileJoystickMove={handleMobileJoystickMove}
+            onMobileJump={handleMobileJump}
           />
         </div>
       )}
