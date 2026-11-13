@@ -12,7 +12,7 @@ import {
   AbandonedStable,
   ActiveMonster,
 } from './game/types';
-import { GameEngine } from './game/engine';
+import { GameEngine, CruisingGait } from './game/engine';
 import { TitleScreen } from './components/TitleScreen';
 import { GameHUD } from './components/GameHUD';
 import { CreatorModal } from './components/CreatorModal';
@@ -70,6 +70,9 @@ export default function App() {
   // Real-time HUD telemetry
   const [speedKmh, setSpeedKmh] = useState(0);
   const [gait, setGait] = useState<Gait>('idle');
+  const [selectedGait, setSelectedGait] = useState<CruisingGait>('canter');
+  const [isDismounted, setIsDismounted] = useState(false);
+  const [isCamped, setIsCamped] = useState(false);
   const [stamina, setStamina] = useState(100);
   const [maxStamina, setMaxStamina] = useState(100);
   const [apples, setApples] = useState(3);
@@ -106,6 +109,9 @@ export default function App() {
           setSpeedKmh(kmh);
           setGait(newGait);
         },
+        onTargetGaitChange: (newTarget) => setSelectedGait(newTarget),
+        onDismountChange: (dismounted) => setIsDismounted(dismounted),
+        onCampChange: (camped) => setIsCamped(camped),
         onPositionUpdate: (pos) => {
           setPlayerPos(pos);
           if (engineRef.current) {
@@ -177,7 +183,18 @@ export default function App() {
   const handleToggleCamp = () => {
     if (engineRef.current) {
       engineRef.current.toggleCamp();
-      setShowCampModal(engineRef.current.isCamped);
+    }
+  };
+
+  const handleToggleDismount = () => {
+    if (engineRef.current) {
+      engineRef.current.toggleDismount();
+    }
+  };
+
+  const handleSelectGait = (nextGait: CruisingGait) => {
+    if (engineRef.current) {
+      engineRef.current.setTargetGait(nextGait);
     }
   };
 
@@ -223,7 +240,7 @@ export default function App() {
 
       {/* Title Screen Overlay */}
       {gameState === 'title' && (
-        <div className="relative z-10 w-full h-full">
+        <div className="relative z-10 w-full h-full pointer-events-none">
           <TitleScreen
             rider={rider}
             horse={horse}
@@ -235,12 +252,15 @@ export default function App() {
 
       {/* Active Game HUD */}
       {gameState === 'playing' && (
-        <div className="relative z-10 w-full h-full">
+        <div className="relative z-10 w-full h-full pointer-events-none">
           <GameHUD
             rider={rider}
             horse={horse}
             speedKmh={speedKmh}
             gait={gait}
+            selectedGait={selectedGait}
+            isDismounted={isDismounted}
+            isCamped={isCamped}
             stamina={stamina}
             maxStamina={maxStamina}
             apples={apples}
@@ -252,8 +272,11 @@ export default function App() {
             monsters={monsters}
             foxPos={foxPos}
             interactPrompt={interactPrompt}
+            onSelectGait={handleSelectGait}
+            onToggleDismount={handleToggleDismount}
             onTriggerStarBurst={handleTriggerStarBurst}
             onToggleCamp={handleToggleCamp}
+            onOpenCampMenu={() => setShowCampModal(true)}
             onFeedApple={handleFeedApple}
             onCycleCamera={handleCycleCamera}
             onOpenMap={() => setShowWorldMap(true)}

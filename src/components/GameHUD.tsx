@@ -20,16 +20,21 @@ import {
   Moon,
   Sunset,
   Sunrise,
-  ShieldAlert,
+  Footprints,
+  Flame,
 } from 'lucide-react';
 import { soundEngine } from '../game/audio';
 import { WORLD_LENGTH, getRoadCenter } from '../game/terrain';
+import type { CruisingGait } from '../game/engine';
 
 interface GameHUDProps {
   rider: RiderProfile;
   horse: HorseProfile;
   speedKmh: number;
   gait: Gait;
+  selectedGait: CruisingGait;
+  isDismounted: boolean;
+  isCamped: boolean;
   stamina: number;
   maxStamina: number;
   apples: number;
@@ -41,8 +46,11 @@ interface GameHUDProps {
   monsters: ActiveMonster[];
   foxPos: { x: number; z: number };
   interactPrompt: string | null;
+  onSelectGait: (gait: CruisingGait) => void;
+  onToggleDismount: () => void;
   onTriggerStarBurst: () => void;
   onToggleCamp: () => void;
+  onOpenCampMenu: () => void;
   onFeedApple: () => void;
   onCycleCamera: () => void;
   onOpenMap: () => void;
@@ -55,6 +63,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   horse,
   speedKmh,
   gait,
+  selectedGait,
+  isDismounted,
+  isCamped,
   stamina,
   maxStamina,
   apples,
@@ -66,8 +77,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   monsters,
   foxPos,
   interactPrompt,
+  onSelectGait,
+  onToggleDismount,
   onTriggerStarBurst,
   onToggleCamp,
+  onOpenCampMenu,
   onFeedApple,
   onCycleCamera,
   onOpenMap,
@@ -410,9 +424,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <Sparkles className="w-5 h-5" />
             </button>
             <button
+              onClick={onToggleDismount}
+              className="w-12 h-12 rounded-full bg-emerald-700/90 border border-emerald-400 text-white flex items-center justify-center shadow-lg active:scale-90"
+              title={isDismounted ? 'Wsiądź na konia' : 'Zejdź z konia'}
+            >
+              <Footprints className="w-5 h-5" />
+            </button>
+            <button
               onClick={onToggleCamp}
               className="w-12 h-12 rounded-full bg-amber-700/90 border border-amber-500 text-amber-100 flex items-center justify-center shadow-lg active:scale-90"
-              title="Obóz"
+              title="Obóz / Namiot"
             >
               <Tent className="w-5 h-5" />
             </button>
@@ -421,7 +442,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
         {/* Unified Bottom Control Dock (Consolidated, Zero Occlusion) */}
         <div
-          className={`pointer-events-auto transition-transform duration-300 w-full max-w-[940px] flex flex-col items-center ${
+          className={`pointer-events-auto transition-transform duration-300 w-full max-w-[1020px] flex flex-col items-center ${
             dockCollapsed ? 'translate-y-[calc(100%-24px)]' : 'translate-y-0'
           }`}
         >
@@ -438,15 +459,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             ) : (
               <>
                 <ChevronDown className="w-3.5 h-3.5" />
-                <span>Ukryj sterowanie (Tryb Zen)</span>
+                <span>Ukryj sterowanie · Przeciągnij myszką by obracać kamerę · Scroll = zoom</span>
               </>
             )}
           </button>
 
           {/* Main Horizontal Dock */}
-          <div className="w-full bg-stone-900/95 border border-stone-800 rounded-2xl p-2.5 sm:p-3 shadow-2xl flex items-center justify-between gap-3 text-stone-200">
-            {/* Speed & Gait Gauge */}
-            <div className="flex items-center gap-3 pl-2">
+          <div className="w-full bg-stone-900/95 border border-stone-800 rounded-2xl p-2.5 sm:p-3 shadow-2xl flex flex-wrap items-center justify-between gap-2.5 text-stone-200">
+            {/* Speed & Gait Selector */}
+            <div className="flex items-center gap-3 pl-1">
               <div className="flex flex-col">
                 <span className="text-[10px] uppercase tracking-wider text-stone-400 font-medium">
                   Prędkość
@@ -458,19 +479,97 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   <span className="text-xs text-stone-400 font-sans">km/h</span>
                 </div>
               </div>
+
               <div className="h-8 w-px bg-stone-800 hidden sm:block" />
-              <div className="hidden sm:flex flex-col">
-                <span className="text-[10px] uppercase tracking-wider text-stone-400 font-medium">
-                  Chód Konia
-                </span>
-                <span className={`text-xs font-bold ${gaitLabels[gait].color}`}>
-                  {gaitLabels[gait].label}
-                </span>
-              </div>
+
+              {!isDismounted ? (
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] uppercase tracking-wider text-stone-400 font-medium">
+                      Bieg jazdy:
+                    </span>
+                    <span className={`text-[11px] font-bold ${gaitLabels[gait].color}`}>
+                      {gaitLabels[gait].label}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {(
+                      [
+                        { id: 'walk', label: '1 Stęp' },
+                        { id: 'trot', label: '2 Kłus' },
+                        { id: 'canter', label: '3 Galop' },
+                        { id: 'gallop', label: '4 Cwał' },
+                      ] as const
+                    ).map((gear) => (
+                      <button
+                        key={gear.id}
+                        onClick={() => onSelectGait(gear.id)}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border transition ${
+                          selectedGait === gear.id
+                            ? 'bg-amber-500 text-stone-950 border-amber-300 shadow'
+                            : 'bg-stone-950 text-stone-400 border-stone-800 hover:text-stone-200'
+                        }`}
+                        title="Wybierz docelowy chód przy trzymaniu W (lub przytrzymaj Shift dla Cwału)"
+                      >
+                        {gear.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col">
+                  <span className="text-[10px] uppercase tracking-wider text-emerald-400 font-bold">
+                    Pieszo
+                  </span>
+                  <span className="text-xs text-stone-300">Spacerujesz obok konia</span>
+                </div>
+              )}
             </div>
 
             {/* Action Buttons cluster */}
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+              {/* Dismount / Mount Button */}
+              <button
+                onClick={onToggleDismount}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold shadow border transition active:scale-95 ${
+                  isDismounted
+                    ? 'bg-emerald-700 hover:bg-emerald-600 text-white border-emerald-400/50'
+                    : 'bg-stone-800 hover:bg-stone-700 text-emerald-200 border-emerald-600/40'
+                }`}
+                title="Zejdź z konia lub wsiądź z powrotem (Klawisz G)"
+              >
+                <Footprints className="w-4 h-4" />
+                <span>{isDismounted ? 'Wsiądź na konia [G]' : 'Zejdź z konia [G]'}</span>
+              </button>
+
+              {/* Camp / Tent Button */}
+              <button
+                onClick={onToggleCamp}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold shadow border transition active:scale-95 ${
+                  isCamped
+                    ? 'bg-amber-600 hover:bg-amber-500 text-stone-950 border-amber-300'
+                    : 'bg-amber-900/80 hover:bg-amber-800 text-amber-100 border-amber-600/40'
+                }`}
+                title="Zejdź z konia i rozbij namiot oraz ognisko na noc (Klawisz E)"
+              >
+                <Tent className="w-4 h-4" />
+                <span className="hidden sm:inline">
+                  {isCamped ? 'Zwiń obóz [E]' : 'Rozbij obóz (Namiot) [E]'}
+                </span>
+              </button>
+
+              {/* Open Camp Sleep/Tea Menu when camped */}
+              {isCamped && (
+                <button
+                  onClick={onOpenCampMenu}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-orange-700 hover:bg-orange-600 text-white rounded-xl text-xs font-semibold shadow border border-orange-400/50 transition active:scale-95"
+                  title="Prześpij noc do świtu lub zaparz herbatę przy ognisku"
+                >
+                  <Flame className="w-4 h-4 text-yellow-300" />
+                  <span>Nocuj do świtu</span>
+                </button>
+              )}
+
               {/* Star Burst Defend */}
               <button
                 onClick={onTriggerStarBurst}
@@ -478,14 +577,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 title="Odstrasz gobliny i trole gwiezdnym blaskiem (Klawisz Q lub F)"
               >
                 <Sparkles className="w-4 h-4 text-cyan-300" />
-                <span className="hidden sm:inline">Gwiezdny Błysk [Q]</span>
+                <span className="hidden md:inline">Błysk [Q]</span>
               </button>
 
               {/* Feed Apple */}
               <button
                 onClick={onFeedApple}
                 disabled={apples <= 0}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition active:scale-95 border ${
+                className={`flex items-center gap-1.5 px-2.5 py-2 rounded-xl text-xs font-semibold transition active:scale-95 border ${
                   apples > 0
                     ? 'bg-rose-900/80 hover:bg-rose-800 text-rose-100 border-rose-500/40 shadow'
                     : 'bg-stone-950 text-stone-600 border-stone-800 cursor-not-allowed'
@@ -493,34 +592,23 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 title="Nakarm konia jabłkiem, by odnowić siły"
               >
                 <Apple className="w-4 h-4 text-rose-400" />
-                <span className="hidden md:inline">Zjedz Jabłko ({apples})</span>
-              </button>
-
-              {/* Camp under stars */}
-              <button
-                onClick={onToggleCamp}
-                className="flex items-center gap-1.5 px-3 py-2 bg-amber-900/80 hover:bg-amber-800 text-amber-100 rounded-xl text-xs font-semibold shadow border border-amber-600/40 transition active:scale-95"
-                title="Rozbij biwak i odpocznij pod gwiazdami (Klawisz E)"
-              >
-                <Tent className="w-4 h-4 text-amber-400" />
-                <span className="hidden sm:inline">Biwak / Obóz [E]</span>
+                <span className="tabular-nums">{apples}</span>
               </button>
 
               {/* World Map */}
               <button
                 onClick={onOpenMap}
-                className="flex items-center gap-1.5 px-3 py-2 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-xl text-xs font-medium border border-stone-700 transition"
+                className="flex items-center gap-1.5 px-2.5 py-2 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-xl text-xs font-medium border border-stone-700 transition"
                 title="Otwórz Mapę Śródziemia [M]"
               >
                 <MapIcon className="w-4 h-4 text-amber-300" />
-                <span className="hidden lg:inline">Mapa [M]</span>
               </button>
 
               {/* Camera Cycle */}
               <button
                 onClick={onCycleCamera}
                 className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 transition"
-                title="Zmień widok kamery [C]"
+                title="Zmień widok kamery [C] · Reset widoku [R]"
               >
                 <Eye className="w-4 h-4" />
               </button>

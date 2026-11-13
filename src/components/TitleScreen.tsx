@@ -93,9 +93,11 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
 
       {/* Flat control hints bar at bottom */}
       <div className="text-center pointer-events-auto pb-2">
-        <div className="inline-flex items-center gap-2 bg-black/60 border border-stone-800 text-stone-300 text-xs md:text-sm px-5 py-2 rounded-full">
-          <Compass className="w-4 h-4 text-amber-400" />
-          <span>Sterowanie: <strong>WASD / Strzałki</strong> Jazda · <strong>Myszka</strong> Obrót kamery · <strong>Spacja</strong> Skok · <strong>Q/F</strong> Gwiazda · <strong>E</strong> Obóz</span>
+        <div className="inline-flex items-center gap-2 bg-black/65 border border-stone-800 text-stone-300 text-xs md:text-sm px-5 py-2 rounded-full">
+          <Compass className="w-4 h-4 text-amber-400 flex-shrink-0" />
+          <span>
+            <strong>WASD</strong> Jazda (<strong>1-4</strong> lub <strong>Shift</strong> = Galop/Cwał) · <strong>Przeciągnij myszką</strong> Obrót kamery · <strong>G</strong> Zejdź z konia · <strong>E</strong> Obóz/Namiot
+          </span>
         </div>
       </div>
     </div>

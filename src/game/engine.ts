@@ -11,6 +11,7 @@ import {
 import { MaterialPalette, createStarParticleTexture } from './materials';
 import {
   createHorseAndRider,
+  createStandaloneRider,
   createFoxModel,
   createMonsterModel,
   createHobbitBurrow,
@@ -19,6 +20,7 @@ import {
   createLonelyMountainModel,
   createTree,
   HorseRig,
+  StandaloneRiderRig,
   FoxRig,
 } from './models';
 import {
@@ -32,8 +34,13 @@ import {
 } from './terrain';
 import { soundEngine } from './audio';
 
+export type CruisingGait = 'walk' | 'trot' | 'canter' | 'gallop';
+
 export interface GameEngineCallbacks {
   onSpeedChange: (speedKmh: number, gait: Gait) => void;
+  onTargetGaitChange: (gait: CruisingGait) => void;
+  onDismountChange: (isDismounted: boolean) => void;
+  onCampChange: (isCamped: boolean) => void;
   onPositionUpdate: (pos: { x: number; y: number; z: number; heading: number }) => void;
   onTimeChange: (timeOfDay: number, timeLabel: string) => void;
   onStaminaChange: (stamina: number, maxStamina: number) => void;
@@ -56,6 +63,7 @@ export class GameEngine {
 
   // Scene Rigs
   private horseRig!: HorseRig;
+  private standaloneRiderRig!: StandaloneRiderRig;
   private foxRig!: FoxRig;
   private foxActor: FoxActor = {
     x: 0,
@@ -79,7 +87,9 @@ export class GameEngine {
     { id: 'stable_2', x: -10, z: 1350, name: 'Górska Przystań Kucyków', applesRemaining: 6, rested: false },
   ];
   private campObject: THREE.Group | null = null;
+  private campPos = new THREE.Vector3();
   public isCamped: boolean = false;
+  public isDismounted: boolean = false;
 
   // Particle systems
   private starParticles!: THREE.Points;
@@ -100,15 +110,20 @@ export class GameEngine {
 
   // Player / Horse Physics State
   private horsePos = new THREE.Vector3(0, 0, 40);
-  private horseVelocity = new THREE.Vector3();
   private horseHeading: number = 0; // Radians, 0 is facing +Z towards Lonely Mountain
+  private riderPos = new THREE.Vector3(0, 0, 40);
+  private riderHeading: number = 0;
+  private riderSpeed: number = 0;
+  private riderStridePhase: number = 0;
   private currentSpeed: number = 0; // m/s
   private targetSpeed: number = 0;
+  private selectedGait: CruisingGait = 'canter'; // Default cruising gait with W = Galop!
   private turnInput: number = 0;
   private stridePhase: number = 0;
   private isJumping: boolean = false;
   private jumpVelocityY: number = 0;
   private jumpYOffset: number = 0;
+  private idleTime: number = 0;
 
   // Stats
   private stamina: number = 100;
@@ -249,11 +264,15 @@ export class GameEngine {
     const flora = createInstancedFlora();
     this.scene.add(flora);
 
-    // 2. Horse and Rider
+    // 2. Horse and Rider + Standalone Dismounted Rider
     this.horseRig = createHorseAndRider(this.horseProfile, this.riderProfile, this.materialPalette);
     this.horsePos.y = getTerrainHeight(this.horsePos.x, this.horsePos.z);
     this.horseRig.group.position.copy(this.horsePos);
     this.scene.add(this.horseRig.group);
+
+    this.standaloneRiderRig = createStandaloneRider(this.riderProfile, this.materialPalette);
+    this.standaloneRiderRig.group.visible = false;
+    this.scene.add(this.standaloneRiderRig.group);
 
     // 3. Felek the Fox
     this.foxRig = createFoxModel();
@@ -393,10 +412,15 @@ export class GameEngine {
   private initInputListeners() {
     window.addEventListener('keydown', this.handleKeyDown);
     window.addEventListener('keyup', this.handleKeyUp);
+    window.addEventListener('blur', this.handleWindowBlur);
     window.addEventListener('resize', this.handleResize);
 
     const canvas = this.renderer.domElement;
+    canvas.style.cursor = 'grab';
     canvas.addEventListener('mousedown', this.handleMouseDown);
+    canvas.addEventListener('dblclick', this.handleDoubleClick);
+    canvas.addEventListener('wheel', this.handleWheel, { passive: false });
+    canvas.addEventListener('contextmenu', this.handleContextMenu);
     window.addEventListener('mousemove', this.handleMouseMove);
     window.addEventListener('mouseup', this.handleMouseUp);
     canvas.addEventListener('touchstart', this.handleTouchStart, { passive: true });
@@ -404,12 +428,41 @@ export class GameEngine {
     window.addEventListener('touchend', this.handleTouchEnd);
   }
 
+  private handleWindowBlur = () => {
+    Object.keys(this.keysHeld).forEach((k) => {
+      this.keysHeld[k] = false;
+    });
+    this.isDraggingMouse = false;
+    this.renderer.domElement.style.cursor = 'grab';
+  };
+
+  private handleContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
+  };
+
+  private handleDoubleClick = () => {
+    this.cameraYawOffset = 0;
+    this.cameraPitch = 0.18;
+  };
+
+  private handleWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    this.cameraDistance = Math.max(4.0, Math.min(15.0, this.cameraDistance + e.deltaY * 0.008));
+  };
+
   private handleKeyDown = (e: KeyboardEvent) => {
+    // Ignore game hotkeys while typing in input fields
+    const tag = (e.target as HTMLElement)?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
     if (this.keysHeld[e.code] !== undefined) {
       this.keysHeld[e.code] = true;
     }
     if (e.code === 'KeyE') {
       this.handleInteractAction();
+    }
+    if (e.code === 'KeyG') {
+      this.toggleDismount();
     }
     if (e.code === 'KeyQ' || e.code === 'KeyF') {
       this.triggerStarBurst();
@@ -417,6 +470,14 @@ export class GameEngine {
     if (e.code === 'KeyC') {
       this.cycleCameraView();
     }
+    if (e.code === 'KeyR') {
+      this.cameraYawOffset = 0;
+      this.cameraPitch = 0.18;
+    }
+    if (e.code === 'Digit1') this.setTargetGait('walk');
+    if (e.code === 'Digit2') this.setTargetGait('trot');
+    if (e.code === 'Digit3') this.setTargetGait('canter');
+    if (e.code === 'Digit4') this.setTargetGait('gallop');
   };
 
   private handleKeyUp = (e: KeyboardEvent) => {
@@ -429,6 +490,7 @@ export class GameEngine {
     this.isDraggingMouse = true;
     this.lastMouseX = e.clientX;
     this.lastMouseY = e.clientY;
+    this.renderer.domElement.style.cursor = 'grabbing';
   };
 
   private handleMouseMove = (e: MouseEvent) => {
@@ -438,12 +500,13 @@ export class GameEngine {
     this.lastMouseX = e.clientX;
     this.lastMouseY = e.clientY;
 
-    this.cameraYawOffset -= dx * 0.006;
-    this.cameraPitch = Math.max(0.04, Math.min(0.7, this.cameraPitch - dy * 0.004));
+    this.cameraYawOffset -= dx * 0.007;
+    this.cameraPitch = Math.max(0.02, Math.min(0.75, this.cameraPitch + dy * 0.005));
   };
 
   private handleMouseUp = () => {
     this.isDraggingMouse = false;
+    this.renderer.domElement.style.cursor = 'grab';
   };
 
   private handleTouchStart = (e: TouchEvent) => {
@@ -462,7 +525,7 @@ export class GameEngine {
     this.lastMouseY = e.touches[0].clientY;
 
     this.cameraYawOffset -= dx * 0.007;
-    this.cameraPitch = Math.max(0.04, Math.min(0.7, this.cameraPitch - dy * 0.005));
+    this.cameraPitch = Math.max(0.02, Math.min(0.75, this.cameraPitch + dy * 0.005));
   };
 
   private handleTouchEnd = () => {
@@ -530,9 +593,49 @@ export class GameEngine {
     }
   }
 
+  public setTargetGait(gait: CruisingGait) {
+    this.selectedGait = gait;
+    this.callbacks.onTargetGaitChange(gait);
+  }
+
+  public toggleDismount(forceMount?: boolean) {
+    const nextDismount = forceMount !== undefined ? !forceMount : !this.isDismounted;
+    if (nextDismount === this.isDismounted) return;
+
+    if (nextDismount) {
+      // Hop off horse to its left side
+      this.isDismounted = true;
+      this.currentSpeed = 0;
+      this.targetSpeed = 0;
+      this.horseRig.riderGroup.visible = false;
+
+      const sideX = Math.cos(this.horseHeading) * 1.4;
+      const sideZ = -Math.sin(this.horseHeading) * 1.4;
+      this.riderPos.set(this.horsePos.x + sideX, 0, this.horsePos.z + sideZ);
+      this.riderPos.y = getTerrainHeight(this.riderPos.x, this.riderPos.z);
+      this.riderHeading = this.horseHeading;
+
+      this.standaloneRiderRig.group.position.copy(this.riderPos);
+      this.standaloneRiderRig.group.rotation.y = this.riderHeading;
+      this.standaloneRiderRig.group.visible = true;
+      soundEngine.playChompOrBrush();
+    } else {
+      // Mount back on horse (bring horse cleanly underneath if nearby, or walk/teleport to saddle)
+      this.isDismounted = false;
+      this.riderSpeed = 0;
+      this.horseRig.riderGroup.visible = true;
+      this.standaloneRiderRig.group.visible = false;
+      soundEngine.playWhinny();
+    }
+
+    this.callbacks.onDismountChange(this.isDismounted);
+  }
+
   public handleInteractAction() {
+    const actorPos = this.isDismounted ? this.riderPos : this.horsePos;
+
     // 1. Check Fox Felek
-    const foxDist = this.horsePos.distanceTo(
+    const foxDist = actorPos.distanceTo(
       new THREE.Vector3(this.foxActor.x, getTerrainHeight(this.foxActor.x, this.foxActor.z), this.foxActor.z)
     );
     if (foxDist < 4.5) {
@@ -548,11 +651,10 @@ export class GameEngine {
 
     // 2. Check Abandoned Stable
     for (const stable of this.stables) {
-      const sDist = this.horsePos.distanceTo(
+      const sDist = actorPos.distanceTo(
         new THREE.Vector3(stable.x, getTerrainHeight(stable.x, stable.z), stable.z)
       );
       if (sDist < 8.0) {
-        // Collect apples & groom horse
         if (stable.applesRemaining > 0) {
           this.applesCollected += stable.applesRemaining;
           stable.applesRemaining = 0;
@@ -568,37 +670,47 @@ export class GameEngine {
       }
     }
 
-    // 3. Toggle Cozy Camp under the stars!
+    // 3. If dismounted and close to horse without camp, remount
+    if (this.isDismounted && !this.isCamped && this.riderPos.distanceTo(this.horsePos) < 3.6) {
+      this.toggleDismount(true);
+      return;
+    }
+
+    // 4. Toggle Cozy Camp under the stars!
     this.toggleCamp();
   }
 
   public toggleCamp() {
     this.isCamped = !this.isCamped;
     if (this.isCamped) {
-      this.targetSpeed = 0;
-      this.currentSpeed = 0;
+      // Dismount automatically so the rider stands beside the tent and campfire!
+      if (!this.isDismounted) {
+        this.toggleDismount(false);
+      }
+
       if (!this.campObject) {
         this.campObject = createCampfireSite();
         this.scene.add(this.campObject);
       }
-      const roadX = getRoadCenter(this.horsePos.z);
-      const campX = roadX + (this.horsePos.x > roadX ? 4.5 : -4.5);
-      const campZ = this.horsePos.z + 2.0;
+      const campX = this.riderPos.x + Math.cos(this.riderHeading) * 2.4;
+      const campZ = this.riderPos.z + Math.sin(this.riderHeading) * 2.4 + 2.0;
       const campY = getTerrainHeight(campX, campZ);
-      this.campObject.position.set(campX, campY, campZ);
+      this.campPos.set(campX, campY, campZ);
+      this.campObject.position.copy(this.campPos);
       this.campObject.visible = true;
 
       // Restores stamina
       this.stamina = this.maxStamina;
       this.callbacks.onStaminaChange(this.stamina, this.maxStamina);
       soundEngine.playWhinny();
-      this.callbacks.onInteractPrompt('Rozbito przytulny obóz pod gwiazdami! Koń odpoczywa przy ognisku.');
+      this.callbacks.onInteractPrompt('Zeszłaś z konia i rozbiłaś obóz pod gwiazdami! Możesz spacerować przy ognisku.');
     } else {
       if (this.campObject) {
         this.campObject.visible = false;
       }
       this.callbacks.onInteractPrompt(null);
     }
+    this.callbacks.onCampChange(this.isCamped);
   }
 
   public sleepUntilDawn() {
@@ -607,6 +719,9 @@ export class GameEngine {
     this.callbacks.onStaminaChange(this.stamina, this.maxStamina);
     soundEngine.playWhinny();
     this.toggleCamp();
+    if (this.isDismounted) {
+      this.toggleDismount(true);
+    }
   }
 
   public feedHorseApple() {
@@ -732,12 +847,7 @@ export class GameEngine {
   }
 
   private updateHorseLocomotion(dt: number) {
-    if (this.isCamped) {
-      this.currentSpeed = 0;
-      this.callbacks.onSpeedChange(0, 'idle');
-      return;
-    }
-
+    this.idleTime += dt;
     const forward = this.keysHeld.KeyW || this.keysHeld.ArrowUp;
     const backward = this.keysHeld.KeyS || this.keysHeld.ArrowDown;
     const left = this.keysHeld.KeyA || this.keysHeld.ArrowLeft;
@@ -750,29 +860,87 @@ export class GameEngine {
     if (left) this.turnInput += 1;
     if (right) this.turnInput -= 1;
 
+    // ---------------------------------------------------
+    // DISMOUNTED ON-FOOT MOVEMENT
+    // ---------------------------------------------------
+    if (this.isDismounted) {
+      this.currentSpeed = THREE.MathUtils.damp(this.currentSpeed, 0, 10, dt);
+      this.horseRig.group.position.copy(this.horsePos);
+      this.horseRig.group.rotation.set(0, this.horseHeading, 0);
+
+      // Walk on foot
+      this.riderHeading += this.turnInput * 2.8 * dt;
+      let targetFootSpeed = 0;
+      if (forward) targetFootSpeed = sprint ? 6.0 : 3.8;
+      else if (backward) targetFootSpeed = -2.0;
+
+      this.riderSpeed = THREE.MathUtils.damp(this.riderSpeed, targetFootSpeed, 10, dt);
+      this.riderPos.x += Math.sin(this.riderHeading) * this.riderSpeed * dt;
+      this.riderPos.z += Math.cos(this.riderHeading) * this.riderSpeed * dt;
+      this.riderPos.x = Math.max(-WORLD_WIDTH * 0.42, Math.min(WORLD_WIDTH * 0.42, this.riderPos.x));
+      this.riderPos.z = Math.max(10, Math.min(WORLD_LENGTH, this.riderPos.z));
+      this.riderPos.y = getTerrainHeight(this.riderPos.x, this.riderPos.z);
+
+      this.standaloneRiderRig.group.position.copy(this.riderPos);
+      this.standaloneRiderRig.group.rotation.y = this.riderHeading;
+
+      // Walking limb animation
+      if (Math.abs(this.riderSpeed) > 0.2) {
+        this.riderStridePhase += dt * (Math.abs(this.riderSpeed) * 2.5);
+        const swing = Math.sin(this.riderStridePhase) * 0.65;
+        this.standaloneRiderRig.legL.rotation.x = swing;
+        this.standaloneRiderRig.legR.rotation.x = -swing;
+        this.standaloneRiderRig.armL.rotation.x = -swing * 0.6;
+        this.standaloneRiderRig.armR.rotation.x = swing * 0.6;
+      } else {
+        this.standaloneRiderRig.legL.rotation.x = THREE.MathUtils.damp(this.standaloneRiderRig.legL.rotation.x, 0, 10, dt);
+        this.standaloneRiderRig.legR.rotation.x = THREE.MathUtils.damp(this.standaloneRiderRig.legR.rotation.x, 0, 10, dt);
+        this.standaloneRiderRig.armL.rotation.x = THREE.MathUtils.damp(this.standaloneRiderRig.armL.rotation.x, 0, 10, dt);
+        this.standaloneRiderRig.armR.rotation.x = THREE.MathUtils.damp(this.standaloneRiderRig.armR.rotation.x, 0, 10, dt);
+      }
+
+      // Recover stamina while camped / dismounted
+      this.stamina = Math.min(this.maxStamina, this.stamina + (this.isCamped ? 12.0 : 7.0) * dt);
+
+      const kmh = Math.round(Math.abs(this.riderSpeed) * 3.6);
+      this.callbacks.onSpeedChange(kmh, Math.abs(this.riderSpeed) > 0.2 ? 'walk' : 'idle');
+      this.callbacks.onStaminaChange(this.stamina, this.maxStamina);
+      this.callbacks.onPositionUpdate({
+        x: this.riderPos.x,
+        y: this.riderPos.y,
+        z: this.riderPos.z,
+        heading: this.riderHeading,
+      });
+      return;
+    }
+
+    // ---------------------------------------------------
+    // MOUNTED HORSE LOCOMOTION
+    // ---------------------------------------------------
     const turnSpeed = this.currentSpeed > 8 ? 1.6 : 2.4;
     this.horseHeading += this.turnInput * turnSpeed * dt;
 
-    // Speeds: Walk ~ 3.5m/s, Trot ~ 7m/s, Canter ~ 12m/s, Gallop ~ 17m/s
+    // Speeds: Stęp (Walk) ~ 4.2m/s, Kłus (Trot) ~ 7.5m/s, Galop (Canter) ~ 12.2m/s, Cwał (Gallop) ~ 17.5m/s
     if (forward) {
-      if (sprint && this.stamina > 5) {
-        this.targetSpeed = 16.5; // Gallop / Cwał
+      if ((sprint || this.selectedGait === 'gallop') && this.stamina > 5) {
+        this.targetSpeed = 17.5; // Cwał (Full Gallop)
         this.stamina = Math.max(0, this.stamina - 4.5 * dt);
-      } else if (this.currentSpeed > 7.5) {
-        this.targetSpeed = 11.5; // Canter / Galop
+      } else if (this.selectedGait === 'canter' || (sprint && this.stamina <= 5)) {
+        this.targetSpeed = 12.2; // Galop (Canter)
+      } else if (this.selectedGait === 'trot') {
+        this.targetSpeed = 7.5; // Kłus (Trot)
       } else {
-        this.targetSpeed = 7.0; // Trot / Kłus
+        this.targetSpeed = 4.2; // Stęp (Walk)
       }
     } else if (backward) {
-      this.targetSpeed = -2.5; // Reverse step
+      this.targetSpeed = -2.5; // Cofanie
     } else {
       this.targetSpeed = 0;
-      // Recover stamina when resting
-      this.stamina = Math.min(this.maxStamina, this.stamina + 6.0 * dt);
+      this.stamina = Math.min(this.maxStamina, this.stamina + 6.5 * dt);
     }
 
-    // Smooth speed acceleration
-    const accel = forward ? 5.5 : 9.0;
+    // Smooth speed acceleration through gaits
+    const accel = forward ? 3.2 : 8.5;
     this.currentSpeed = THREE.MathUtils.damp(this.currentSpeed, this.targetSpeed, accel, dt);
 
     // Jump handling
@@ -805,12 +973,12 @@ export class GameEngine {
     const groundY = getTerrainHeight(this.horsePos.x, this.horsePos.z);
     this.horsePos.y = groundY + this.jumpYOffset;
 
-    // Determine gait
+    // Determine gait from actual speed
     let gait: Gait = 'idle';
     const absSpeed = Math.abs(this.currentSpeed);
-    if (absSpeed > 13.0) gait = 'gallop';
-    else if (absSpeed > 8.0) gait = 'canter';
-    else if (absSpeed > 3.0) gait = 'trot';
+    if (absSpeed > 13.8) gait = 'gallop';
+    else if (absSpeed > 9.0) gait = 'canter';
+    else if (absSpeed > 5.0) gait = 'trot';
     else if (absSpeed > 0.3) gait = 'walk';
 
     // Rhythmic hoof sound trigger
@@ -845,11 +1013,25 @@ export class GameEngine {
 
   private updateLegsAndRiderAnimation(dt: number) {
     const absSpeed = Math.abs(this.currentSpeed);
-    const legFreq = absSpeed > 12 ? 14 : absSpeed > 7 ? 9 : absSpeed > 2 ? 6 : 3;
     const animPhase = absSpeed > 0.2 ? this.stridePhase : 0;
 
+    if (absSpeed <= 0.2) {
+      // Gentle idle grazing / breathing for parked horse
+      const graze = Math.sin(this.idleTime * 1.4) * 0.14;
+      this.horseRig.headNeckGroup.rotation.x = this.isDismounted ? 0.35 + graze : graze * 0.4;
+      this.horseRig.tailJoint.rotation.y = Math.sin(this.idleTime * 2.2) * 0.15;
+      this.horseRig.legFL.upper.rotation.x = 0;
+      this.horseRig.legFR.upper.rotation.x = 0;
+      this.horseRig.legRL.upper.rotation.x = 0;
+      this.horseRig.legRR.upper.rotation.x = 0;
+      this.horseRig.legFL.lower.rotation.x = 0;
+      this.horseRig.legFR.lower.rotation.x = 0;
+      this.horseRig.legRL.lower.rotation.x = 0;
+      this.horseRig.legRR.lower.rotation.x = 0;
+      return;
+    }
+
     // Natural 4-legged gait biomechanics
-    // Front legs alternate or pair, rear legs drive forward
     const swingFL = Math.sin(animPhase) * Math.min(0.65, absSpeed * 0.07);
     const swingFR = Math.sin(animPhase + Math.PI) * Math.min(0.65, absSpeed * 0.07);
     const swingRL = Math.sin(animPhase + Math.PI * 0.5) * Math.min(0.65, absSpeed * 0.07);
@@ -993,26 +1175,37 @@ export class GameEngine {
   }
 
   private updateCamera(dt: number) {
-    // Third person camera behind the horse
-    const totalYaw = this.horseHeading + this.cameraYawOffset;
-    const camX = this.horsePos.x - Math.sin(totalYaw) * this.cameraDistance;
-    const camZ = this.horsePos.z - Math.cos(totalYaw) * this.cameraDistance;
-    const targetY = this.horsePos.y + this.cameraHeight + this.cameraPitch * 4.0;
+    // Follow standalone rider when dismounted, or horse when mounted
+    const targetPos = this.isDismounted ? this.riderPos : this.horsePos;
+    const targetHeading = this.isDismounted ? this.riderHeading : this.horseHeading;
+    const dist = this.isDismounted ? Math.min(this.cameraDistance, 5.5) : this.cameraDistance;
+    const height = this.isDismounted ? 2.2 : this.cameraHeight;
+
+    const totalYaw = targetHeading + this.cameraYawOffset;
+    const camX = targetPos.x - Math.sin(totalYaw) * dist;
+    const camZ = targetPos.z - Math.cos(totalYaw) * dist;
+    const targetY = targetPos.y + height + this.cameraPitch * 4.0;
 
     // Smooth camera damping
     this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, camX, 8.0, dt);
     this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, targetY, 8.0, dt);
     this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, camZ, 8.0, dt);
 
-    // Look at horse with slight elevation
-    const lookTarget = new THREE.Vector3(this.horsePos.x, this.horsePos.y + 1.8, this.horsePos.z);
+    // Look at actor with slight elevation
+    const lookTarget = new THREE.Vector3(
+      targetPos.x,
+      targetPos.y + (this.isDismounted ? 1.2 : 1.8),
+      targetPos.z
+    );
     this.camera.lookAt(lookTarget);
   }
 
   private checkMilestonesAndInteractions() {
+    const actorPos = this.isDismounted ? this.riderPos : this.horsePos;
+
     // Milestones
     WORLD_MILESTONES.forEach((ms) => {
-      if (!ms.visited && Math.abs(this.horsePos.z - ms.zPos) < 25) {
+      if (!ms.visited && Math.abs(actorPos.z - ms.zPos) < 25) {
         ms.visited = true;
         this.callbacks.onMilestoneReached(ms.name, ms.description);
         soundEngine.playStarBurst();
@@ -1025,7 +1218,7 @@ export class GameEngine {
 
     // Check interaction prompt
     let prompt: string | null = null;
-    const foxDist = this.horsePos.distanceTo(
+    const foxDist = actorPos.distanceTo(
       new THREE.Vector3(this.foxActor.x, getTerrainHeight(this.foxActor.x, this.foxActor.z), this.foxActor.z)
     );
     if (foxDist < 4.5) {
@@ -1033,7 +1226,7 @@ export class GameEngine {
     }
 
     for (const stable of this.stables) {
-      const sDist = this.horsePos.distanceTo(
+      const sDist = actorPos.distanceTo(
         new THREE.Vector3(stable.x, getTerrainHeight(stable.x, stable.z), stable.z)
       );
       if (sDist < 8.0) {
@@ -1042,8 +1235,12 @@ export class GameEngine {
       }
     }
 
-    if (!prompt && this.isCamped) {
-      prompt = '[E] Zwiń obóz i ruszaj w drogę 🏕️';
+    if (!prompt && this.isDismounted) {
+      if (this.riderPos.distanceTo(this.horsePos) < 3.6) {
+        prompt = '[G] lub [E] Wsiądź z powrotem na konia 🐎';
+      } else if (this.isCamped) {
+        prompt = 'Obóz rozbity! Spaceruj wokół ogniska lub naciśnij [G], aby wrócić na konia 🏕️';
+      }
     }
 
     this.callbacks.onInteractPrompt(prompt);
@@ -1051,17 +1248,22 @@ export class GameEngine {
 
   // Mobile virtual joystick control
   public applyMobileInput(forwardRatio: number, turnRatio: number) {
-    if (this.isCamped) return;
     this.turnInput = -turnRatio;
+    if (this.isDismounted) {
+      this.riderHeading += this.turnInput * 2.5 * 0.016;
+      this.riderSpeed = forwardRatio > 0.1 ? 3.8 : forwardRatio < -0.2 ? -2.0 : 0;
+      return;
+    }
+
     this.horseHeading += this.turnInput * 2.2 * 0.016;
 
     if (forwardRatio > 0.1) {
-      if (forwardRatio > 0.8 && this.stamina > 5) {
-        this.targetSpeed = 16.5;
+      if (forwardRatio > 0.85 && this.stamina > 5) {
+        this.targetSpeed = 17.5;
       } else if (forwardRatio > 0.5) {
-        this.targetSpeed = 11.5;
+        this.targetSpeed = 12.2;
       } else {
-        this.targetSpeed = 6.5;
+        this.targetSpeed = 7.5;
       }
     } else if (forwardRatio < -0.2) {
       this.targetSpeed = -2.5;
@@ -1077,7 +1279,15 @@ export class GameEngine {
     this.scene.remove(this.horseRig.group);
     this.horseRig = createHorseAndRider(this.horseProfile, this.riderProfile, this.materialPalette);
     this.horseRig.group.position.copy(this.horsePos);
+    this.horseRig.riderGroup.visible = !this.isDismounted;
     this.scene.add(this.horseRig.group);
+
+    this.scene.remove(this.standaloneRiderRig.group);
+    this.standaloneRiderRig = createStandaloneRider(this.riderProfile, this.materialPalette);
+    this.standaloneRiderRig.group.position.copy(this.riderPos);
+    this.standaloneRiderRig.group.rotation.y = this.riderHeading;
+    this.standaloneRiderRig.group.visible = this.isDismounted;
+    this.scene.add(this.standaloneRiderRig.group);
   }
 
   public getStables(): AbandonedStable[] {
@@ -1097,10 +1307,17 @@ export class GameEngine {
     cancelAnimationFrame(this.frameId);
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
+    window.removeEventListener('blur', this.handleWindowBlur);
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('mousemove', this.handleMouseMove);
     window.removeEventListener('mouseup', this.handleMouseUp);
     window.removeEventListener('touchend', this.handleTouchEnd);
+    const canvas = this.renderer.domElement;
+    canvas.removeEventListener('mousedown', this.handleMouseDown);
+    canvas.removeEventListener('dblclick', this.handleDoubleClick);
+    canvas.removeEventListener('wheel', this.handleWheel);
+    canvas.removeEventListener('contextmenu', this.handleContextMenu);
+    canvas.removeEventListener('touchstart', this.handleTouchStart);
     soundEngine.stopPeacefulMusic();
     this.materialPalette.dispose();
     this.renderer.dispose();

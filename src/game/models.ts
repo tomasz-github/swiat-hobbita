@@ -408,6 +408,136 @@ export function createHorseAndRider(
   };
 }
 
+export interface StandaloneRiderRig {
+  group: THREE.Group;
+  torso: THREE.Group;
+  head: THREE.Group;
+  armL: THREE.Group;
+  armR: THREE.Group;
+  legL: THREE.Group;
+  legR: THREE.Group;
+  starBrooch: THREE.Mesh;
+}
+
+export function createStandaloneRider(
+  rider: RiderProfile,
+  palette: MaterialPalette
+): StandaloneRiderRig {
+  const root = new THREE.Group();
+  root.name = 'StandaloneRiderRoot';
+
+  const hairMat = palette.getRiderHairMaterial(rider.hairColor);
+  const outfitMat = palette.getRiderOutfitMaterial(rider.outfitColor);
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xfad6bf, roughness: 0.6 });
+  const bootMat = new THREE.MeshStandardMaterial({ color: 0x241711, roughness: 0.4 });
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x0f0e0c, roughness: 0.1, metalness: 0.1 });
+
+  // Torso group (hip pivot at y = 0.85)
+  const torso = new THREE.Group();
+  torso.position.set(0, 0.85, 0);
+  root.add(torso);
+
+  const bodyMesh = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.55, 0.3), outfitMat);
+  bodyMesh.position.set(0, 0.3, 0);
+  bodyMesh.castShadow = true;
+  torso.add(bodyMesh);
+
+  const cloakMesh = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.52, 0.08), outfitMat);
+  cloakMesh.position.set(0, 0.2, -0.16);
+  cloakMesh.rotation.x = 0.12;
+  torso.add(cloakMesh);
+
+  // Head
+  const head = new THREE.Group();
+  head.position.set(0, 0.68, 0);
+  torso.add(head);
+
+  const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 10), skinMat);
+  headMesh.castShadow = true;
+  head.add(headMesh);
+
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 6), eyeMat);
+  eyeL.position.set(0.07, 0.03, 0.16);
+  const eyeR = eyeL.clone();
+  eyeR.position.x = -0.07;
+  head.add(eyeL, eyeR);
+
+  const hairCap = new THREE.Mesh(
+    new THREE.SphereGeometry(0.19, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.65),
+    hairMat
+  );
+  hairCap.position.set(0, 0.04, -0.02);
+  head.add(hairCap);
+
+  const braid = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.03, 0.6, 6), hairMat);
+  braid.position.set(0, -0.18, -0.2);
+  braid.rotation.x = -0.25;
+  head.add(braid);
+
+  // Star brooch
+  const broochMat = new THREE.MeshStandardMaterial({
+    color: 0x99f6ff,
+    emissive: 0x44d7ff,
+    emissiveIntensity: 0.8,
+    roughness: 0.1,
+    metalness: 0.9,
+  });
+  const starBrooch = new THREE.Mesh(new THREE.OctahedronGeometry(0.06, 0), broochMat);
+  starBrooch.position.set(0, 0.4, 0.17);
+  torso.add(starBrooch);
+
+  // Arms
+  const armGeo = new THREE.CylinderGeometry(0.065, 0.055, 0.48, 6);
+  const armL = new THREE.Group();
+  armL.position.set(0.26, 0.48, 0);
+  const armMeshL = new THREE.Mesh(armGeo, outfitMat);
+  armMeshL.position.set(0, -0.22, 0);
+  armMeshL.castShadow = true;
+  const handL = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 6), skinMat);
+  handL.position.set(0, -0.46, 0);
+  armL.add(armMeshL, handL);
+  torso.add(armL);
+
+  const armR = new THREE.Group();
+  armR.position.set(-0.26, 0.48, 0);
+  const armMeshR = new THREE.Mesh(armGeo, outfitMat);
+  armMeshR.position.set(0, -0.22, 0);
+  armMeshR.castShadow = true;
+  const handR = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 6), skinMat);
+  handR.position.set(0, -0.46, 0);
+  armR.add(armMeshR, handR);
+  torso.add(armR);
+
+  // Standing Legs
+  function buildStandingLeg(x: number) {
+    const leg = new THREE.Group();
+    leg.position.set(x, 0.85, 0);
+    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.08, 0.45, 6), outfitMat);
+    thigh.position.set(0, -0.22, 0);
+    thigh.castShadow = true;
+    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.42, 0.2), bootMat);
+    boot.position.set(0, -0.63, 0.03);
+    boot.castShadow = true;
+    leg.add(thigh, boot);
+    root.add(leg);
+    return leg;
+  }
+
+  const legL = buildStandingLeg(0.12);
+  const legR = buildStandingLeg(-0.12);
+
+  return {
+    group: root,
+    torso,
+    head,
+    armL,
+    armR,
+    legL,
+    legR,
+    starBrooch,
+  };
+}
+
 // -------------------------------------------------------------
 // FELEK THE FOX (Cute stylized friendly fox)
 // -------------------------------------------------------------
