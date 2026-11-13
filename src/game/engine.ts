@@ -24,6 +24,8 @@ import {
   createCampfireSite,
   createLonelyMountainModel,
   createTree,
+  extractMaterialBatches,
+  MaterialBatch,
   HorseRig,
   StandaloneRiderRig,
   FoxRig,
@@ -124,13 +126,61 @@ export class GameEngine {
   private moonMat!: THREE.MeshBasicMaterial;
   private starField!: THREE.Points;
   private starFieldMat!: THREE.PointsMaterial;
-  private cloudsGroup!: THREE.Group;
+  private cloudsInstMesh!: THREE.InstancedMesh;
   private cloudMat!: THREE.MeshStandardMaterial;
-  private clouds: Array<{ mesh: THREE.Group; speed: number; baseY: number }> = [];
+  private cloudPuffs: Array<{
+    cloudX: number;
+    cloudY: number;
+    cloudZ: number;
+    speed: number;
+    ox: number;
+    oy: number;
+    oz: number;
+    sx: number;
+    sy: number;
+    sz: number;
+  }> = [];
+  private cloudDummy = new THREE.Object3D();
 
   // Static circular colliders for buildings, dense thickets & tree trunks
   private colliders: Array<{ x: number; z: number; r: number }> = [];
   private lookTargetVec = new THREE.Vector3();
+
+  // Reusable colors for zero-GC updateDayNight
+  private readonly cNightSky = new THREE.Color(0x02040a);
+  private readonly cDawnDark = new THREE.Color(0x060a18);
+  private readonly cDawnWarm = new THREE.Color(0xf7b98f);
+  private readonly cDaySky = new THREE.Color(0x82beff);
+  private readonly cSunsetSky = new THREE.Color(0xe65c3a);
+  private readonly cDuskDeep = new THREE.Color(0x050814);
+  private readonly cNightHemiSky = new THREE.Color(0x0b1224);
+  private readonly cDawnHemiStart = new THREE.Color(0x281e3a);
+  private readonly cDawnHemiEnd = new THREE.Color(0xffb58a);
+  private readonly cDayHemiSky = new THREE.Color(0xfffaf0);
+  private readonly cSunsetHemiStart = new THREE.Color(0xff925c);
+  private readonly cSunsetHemiEnd = new THREE.Color(0x161c33);
+  private readonly cNightHemiGround = new THREE.Color(0x030504);
+  private readonly cDayHemiGround = new THREE.Color(0x4a7840);
+  private readonly cDawnDirStart = new THREE.Color(0xff9f68);
+  private readonly cDawnDirEnd = new THREE.Color(0xffe9c7);
+  private readonly cDayDir = new THREE.Color(0xfff8e6);
+  private readonly cSunsetDirStart = new THREE.Color(0xff904d);
+  private readonly cNightDir = new THREE.Color(0x5d7cb8);
+  private readonly cNightCloud = new THREE.Color(0x0f172a);
+  private readonly cDawnCloudStart = new THREE.Color(0x2d243b);
+  private readonly cDawnCloudEnd = new THREE.Color(0xffd4b8);
+  private readonly cDayCloud = new THREE.Color(0xffffff);
+  private readonly cSunsetCloudEnd = new THREE.Color(0x1e253d);
+  private readonly cSunCoreBase = new THREE.Color(0xfff6d1);
+  private readonly cSunCoreWarm = new THREE.Color(0xff9248);
+  private readonly cSunHaloBase = new THREE.Color(0xffd98a);
+  private readonly cSunHaloWarm = new THREE.Color(0xff6b35);
+
+  private tmpSkyCol = new THREE.Color();
+  private tmpHemiSky = new THREE.Color();
+  private tmpHemiGround = new THREE.Color();
+  private tmpDirColor = new THREE.Color();
+  private tmpCloudTint = new THREE.Color();
 
   // Lighting & Day/Night
   private dirSunLight!: THREE.DirectionalLight;
@@ -240,7 +290,7 @@ export class GameEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.1;
-    this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 1.5));
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -371,8 +421,7 @@ export class GameEngine {
     this.moonGroup.add(moonDisc, moonHalo);
     this.skyDomeGroup.add(this.moonGroup);
 
-    // 4. Drifting Stylized Volumetric 3D Clouds across the Sky
-    this.cloudsGroup = new THREE.Group();
+    // 4. Drifting Stylized Volumetric 3D Clouds rendered in 1 single InstancedMesh draw call
     this.cloudMat = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       roughness: 0.95,
@@ -382,35 +431,43 @@ export class GameEngine {
       fog: false,
     });
 
-    const puffGeo = new THREE.SphereGeometry(1, 12, 10);
+    const puffGeo = new THREE.SphereGeometry(1, 10, 8);
     for (let c = 0; c < 34; c++) {
-      const cloud = new THREE.Group();
       const puffCount = 5 + (c % 3);
-      for (let p = 0; p < puffCount; p++) {
-        const puff = new THREE.Mesh(puffGeo, this.cloudMat);
-        const px = (p - (puffCount - 1) / 2) * (5.2 + Math.random() * 2.5);
-        const py = (Math.random() - 0.3) * 3.0;
-        const pz = (Math.random() - 0.5) * 6.5;
-        const sx = 6.5 + Math.random() * 5.5;
-        const sy = 3.2 + Math.random() * 2.4;
-        const sz = 5.5 + Math.random() * 4.5;
-        puff.position.set(px, py, pz);
-        puff.scale.set(sx, sy, sz);
-        cloud.add(puff);
-      }
-
       const cx = (Math.random() - 0.5) * 480;
       const cy = 96 + Math.random() * 52;
       const cz = -80 + (c / 34) * (WORLD_LENGTH + 260);
-      cloud.position.set(cx, cy, cz);
-      this.cloudsGroup.add(cloud);
-      this.clouds.push({
-        mesh: cloud,
-        speed: 1.2 + Math.random() * 1.8,
-        baseY: cy,
-      });
+      const speed = 1.2 + Math.random() * 1.8;
+
+      for (let p = 0; p < puffCount; p++) {
+        this.cloudPuffs.push({
+          cloudX: cx,
+          cloudY: cy,
+          cloudZ: cz,
+          speed,
+          ox: (p - (puffCount - 1) / 2) * (5.2 + Math.random() * 2.5),
+          oy: (Math.random() - 0.3) * 3.0,
+          oz: (Math.random() - 0.5) * 6.5,
+          sx: 6.5 + Math.random() * 5.5,
+          sy: 3.2 + Math.random() * 2.4,
+          sz: 5.5 + Math.random() * 4.5,
+        });
+      }
     }
-    this.scene.add(this.cloudsGroup);
+
+    this.cloudsInstMesh = new THREE.InstancedMesh(puffGeo, this.cloudMat, this.cloudPuffs.length);
+    this.cloudsInstMesh.frustumCulled = false;
+    this.cloudsInstMesh.castShadow = false;
+    this.cloudsInstMesh.receiveShadow = false;
+    for (let i = 0; i < this.cloudPuffs.length; i++) {
+      const p = this.cloudPuffs[i];
+      this.cloudDummy.position.set(p.cloudX + p.ox, p.cloudY + p.oy, p.cloudZ + p.oz);
+      this.cloudDummy.scale.set(p.sx, p.sy, p.sz);
+      this.cloudDummy.updateMatrix();
+      this.cloudsInstMesh.setMatrixAt(i, this.cloudDummy.matrix);
+    }
+    this.cloudsInstMesh.instanceMatrix.needsUpdate = true;
+    this.scene.add(this.cloudsInstMesh);
   }
 
   private initWorld() {
@@ -536,7 +593,27 @@ export class GameEngine {
       this.colliders.push({ x, z, r: 0.45 });
     });
 
-    // 5. Dense Impassable Forest Thickets (lasy miejscami tak gęste, że nie da się przejechać)
+    // 5. Dense Impassable Forest Thickets + Biome Trees (GPU Z-Chunked InstancedMeshes: full detail at 60 FPS!)
+    type FloraKind = 'apple' | 'willow' | 'pine' | 'bush';
+    const chunkSize = 120;
+    const numChunks = Math.ceil(WORLD_LENGTH / chunkSize);
+    const chunkMatrices: Record<FloraKind, THREE.Matrix4[][]> = {
+      apple: Array.from({ length: numChunks }, () => []),
+      willow: Array.from({ length: numChunks }, () => []),
+      pine: Array.from({ length: numChunks }, () => []),
+      bush: Array.from({ length: numChunks }, () => []),
+    };
+    const instanceDummy = new THREE.Object3D();
+
+    const pushFloraInstance = (kind: FloraKind, x: number, y: number, z: number, scale: number, rotY: number) => {
+      const chunkIdx = Math.max(0, Math.min(numChunks - 1, Math.floor(z / chunkSize)));
+      instanceDummy.position.set(x, y, z);
+      instanceDummy.rotation.set(0, rotY, 0);
+      instanceDummy.scale.set(scale, scale, scale);
+      instanceDummy.updateMatrix();
+      chunkMatrices[kind][chunkIdx].push(instanceDummy.matrix.clone());
+    };
+
     const thicketZones = [
       { zMin: 265, zMax: 325, side: 1, offMin: 34, offMax: 78, type: 'apple' as const },
       { zMin: 412, zMax: 515, side: -1, offMin: 24, offMax: 74, type: 'willow' as const },
@@ -569,12 +646,8 @@ export class GameEngine {
           if (Math.abs(zPos - 460) < 18 && Math.abs(x - roadX) < 22) continue;
 
           const y = getTerrainHeight(x, zPos);
-          const tree = createTree(tz.type, this.materialPalette);
-          tree.position.set(x, y, zPos);
           const s = 0.92 + Math.random() * 0.42;
-          tree.scale.set(s, s, s);
-          tree.rotation.y = Math.random() * Math.PI * 2;
-          this.scene.add(tree);
+          pushFloraInstance(tz.type, x, y, zPos, s, Math.random() * Math.PI * 2);
           this.colliders.push({ x, z: zPos, r: 1.75 });
 
           // Add dense undergrowth bush between trunks so thickets look & feel truly impassable
@@ -582,12 +655,8 @@ export class GameEngine {
             const bx = x + (Math.random() - 0.5) * 2.2;
             const bz = zPos + (Math.random() - 0.5) * 2.2;
             const by = getTerrainHeight(bx, bz);
-            const bush = createThicketBush(this.materialPalette);
-            bush.position.set(bx, by, bz);
-            bush.rotation.y = Math.random() * Math.PI * 2;
             const bs = 0.85 + Math.random() * 0.45;
-            bush.scale.set(bs, bs, bs);
-            this.scene.add(bush);
+            pushFloraInstance('bush', bx, by, bz, bs, Math.random() * Math.PI * 2);
             this.colliders.push({ x: bx, z: bz, r: 1.4 });
           }
         }
@@ -611,12 +680,8 @@ export class GameEngine {
         const y = getTerrainHeight(x, z);
         const trailY = getTerrainHeight(roadX, z);
         if (y >= trailY - 1.5) {
-          const tree = createTree('pine', this.materialPalette);
-          tree.position.set(x, y, z);
           const s = 0.78 + Math.random() * 0.45;
-          tree.scale.set(s, s, s);
-          tree.rotation.y = Math.random() * Math.PI * 2;
-          this.scene.add(tree);
+          pushFloraInstance('pine', x, y, z, s, Math.random() * Math.PI * 2);
           this.colliders.push({ x, z, r: 0.9 });
         }
       } else {
@@ -633,17 +698,40 @@ export class GameEngine {
             // Keep immediate settlement yards clear of random trees
             if (z < 380 && Math.abs(x - roadX) < 32) return;
             const y = getTerrainHeight(x, z);
-            const tree = createTree(type, this.materialPalette);
-            tree.position.set(x, y, z);
             const s = 0.8 + Math.random() * 0.48;
-            tree.scale.set(s, s, s);
-            tree.rotation.y = Math.random() * Math.PI * 2;
-            this.scene.add(tree);
+            pushFloraInstance(type, x, y, z, s, Math.random() * Math.PI * 2);
             this.colliders.push({ x, z, r: 0.9 });
           });
         });
       }
     }
+
+    // Build GPU-instanced chunks from single prototype of each tree & thicket bush (all details preserved!)
+    const protoBatches: Record<FloraKind, MaterialBatch[]> = {
+      apple: extractMaterialBatches(createTree('apple', this.materialPalette)),
+      willow: extractMaterialBatches(createTree('willow', this.materialPalette)),
+      pine: extractMaterialBatches(createTree('pine', this.materialPalette)),
+      bush: extractMaterialBatches(createThicketBush(this.materialPalette)),
+    };
+
+    (['apple', 'willow', 'pine', 'bush'] as FloraKind[]).forEach((kind) => {
+      const batches = protoBatches[kind];
+      for (let c = 0; c < numChunks; c++) {
+        const mats = chunkMatrices[kind][c];
+        if (mats.length === 0) continue;
+        for (const b of batches) {
+          const inst = new THREE.InstancedMesh(b.geometry, b.material, mats.length);
+          for (let i = 0; i < mats.length; i++) {
+            inst.setMatrixAt(i, mats[i]);
+          }
+          inst.instanceMatrix.needsUpdate = true;
+          inst.computeBoundingSphere();
+          inst.castShadow = b.castShadow && kind !== 'bush';
+          inst.receiveShadow = b.receiveShadow;
+          this.scene.add(inst);
+        }
+      }
+    });
 
     // 6. Abandoned Stables
     this.stables.forEach((stable) => {
@@ -1213,8 +1301,7 @@ export class GameEngine {
       this.timeOfDay = (this.timeOfDay + this.timeCycleSpeed * dt) % 1.0;
     }
 
-    // Sky, Clouds, Sun, Moon, Stars & Darkness tuning
-    // 0.15 - 0.30: Dawn | 0.30 - 0.70: Day | 0.70 - 0.82: Sunset | 0.82 - 0.15: Dark Starry Night
+    // Sky, Clouds, Sun, Moon, Stars & Darkness tuning (zero per-frame allocations)
     let sunIntensity = 1.8;
     let hemiIntensity = 0.72;
     let envIntensity = 0.95;
@@ -1222,22 +1309,16 @@ export class GameEngine {
     let fogNear = 55;
     let fogFar = 520;
     let starOpacity = 0;
-    let skyCol = new THREE.Color(0x8bc4ff);
-    let hemiSky = new THREE.Color(0xfff7e6);
-    let hemiGround = new THREE.Color(0x48753e);
-    let dirColor = new THREE.Color(0xfffaed);
-    let cloudTint = new THREE.Color(0xffffff);
     let cloudOpacity = 0.9;
     let timeLabel = 'Dzień';
 
     if (this.timeOfDay >= 0.15 && this.timeOfDay < 0.3) {
-      // Dawn
       const t = (this.timeOfDay - 0.15) / 0.15;
-      skyCol = new THREE.Color(0x060a18).lerp(new THREE.Color(0xf7b98f), t);
-      hemiSky = new THREE.Color(0x281e3a).lerp(new THREE.Color(0xffb58a), t);
-      hemiGround = new THREE.Color(0x090c0a).lerp(new THREE.Color(0x445f39), t);
-      dirColor = new THREE.Color(0xff9f68).lerp(new THREE.Color(0xffe9c7), t);
-      cloudTint = new THREE.Color(0x2d243b).lerp(new THREE.Color(0xffd4b8), t);
+      this.tmpSkyCol.copy(this.cDawnDark).lerp(this.cDawnWarm, t);
+      this.tmpHemiSky.copy(this.cDawnHemiStart).lerp(this.cDawnHemiEnd, t);
+      this.tmpHemiGround.copy(this.cNightHemiGround).lerp(this.cDayHemiGround, t);
+      this.tmpDirColor.copy(this.cDawnDirStart).lerp(this.cDawnDirEnd, t);
+      this.tmpCloudTint.copy(this.cDawnCloudStart).lerp(this.cDawnCloudEnd, t);
       sunIntensity = 0.18 + t * 1.15;
       hemiIntensity = 0.14 + t * 0.45;
       envIntensity = 0.12 + t * 0.65;
@@ -1248,12 +1329,11 @@ export class GameEngine {
       cloudOpacity = 0.55 + t * 0.35;
       timeLabel = 'Poranek / Świt';
     } else if (this.timeOfDay >= 0.3 && this.timeOfDay < 0.7) {
-      // Bright Sunny Day
-      skyCol = new THREE.Color(0x82beff);
-      hemiSky = new THREE.Color(0xfffaf0);
-      hemiGround = new THREE.Color(0x4a7840);
-      dirColor = new THREE.Color(0xfff8e6);
-      cloudTint = new THREE.Color(0xffffff);
+      this.tmpSkyCol.copy(this.cDaySky);
+      this.tmpHemiSky.copy(this.cDayHemiSky);
+      this.tmpHemiGround.copy(this.cDayHemiGround);
+      this.tmpDirColor.copy(this.cDayDir);
+      this.tmpCloudTint.copy(this.cDayCloud);
       sunIntensity = 1.85;
       hemiIntensity = 0.74;
       envIntensity = 0.95;
@@ -1264,16 +1344,15 @@ export class GameEngine {
       cloudOpacity = 0.92;
       timeLabel = 'Słoneczne Południe';
     } else if (this.timeOfDay >= 0.7 && this.timeOfDay < 0.82) {
-      // Golden Sunset -> Deep Twilight
       const t = (this.timeOfDay - 0.7) / 0.12;
-      skyCol = new THREE.Color(0x82beff).lerp(new THREE.Color(0xe65c3a), Math.min(1, t * 1.35));
+      this.tmpSkyCol.copy(this.cDaySky).lerp(this.cSunsetSky, Math.min(1, t * 1.35));
       if (t > 0.65) {
-        skyCol.lerp(new THREE.Color(0x050814), (t - 0.65) / 0.35);
+        this.tmpSkyCol.lerp(this.cDuskDeep, (t - 0.65) / 0.35);
       }
-      hemiSky = new THREE.Color(0xff925c).lerp(new THREE.Color(0x161c33), t);
-      hemiGround = new THREE.Color(0x4a7840).lerp(new THREE.Color(0x070a08), t);
-      dirColor = new THREE.Color(0xff904d).lerp(new THREE.Color(0x526b9e), t);
-      cloudTint = new THREE.Color(0xffb58a).lerp(new THREE.Color(0x1e253d), t);
+      this.tmpHemiSky.copy(this.cSunsetHemiStart).lerp(this.cSunsetHemiEnd, t);
+      this.tmpHemiGround.copy(this.cDayHemiGround).lerp(this.cNightHemiGround, t);
+      this.tmpDirColor.copy(this.cSunsetDirStart).lerp(this.cNightDir, t);
+      this.tmpCloudTint.copy(this.cDawnHemiEnd).lerp(this.cSunsetCloudEnd, t);
       sunIntensity = 1.85 - t * 1.65;
       hemiIntensity = 0.72 - t * 0.6;
       envIntensity = 0.95 - t * 0.86;
@@ -1284,12 +1363,11 @@ export class GameEngine {
       cloudOpacity = 0.9 - t * 0.55;
       timeLabel = 'Złoty Zmierzch';
     } else {
-      // Very Dark Starry Night
-      skyCol = new THREE.Color(0x02040a);
-      hemiSky = new THREE.Color(0x0b1224);
-      hemiGround = new THREE.Color(0x030504);
-      dirColor = new THREE.Color(0x5d7cb8);
-      cloudTint = new THREE.Color(0x0f172a);
+      this.tmpSkyCol.copy(this.cNightSky);
+      this.tmpHemiSky.copy(this.cNightHemiSky);
+      this.tmpHemiGround.copy(this.cNightHemiGround);
+      this.tmpDirColor.copy(this.cNightDir);
+      this.tmpCloudTint.copy(this.cNightCloud);
       sunIntensity = 0.11;
       hemiIntensity = 0.09;
       envIntensity = 0.06;
@@ -1301,24 +1379,24 @@ export class GameEngine {
       timeLabel = 'Gwiaździsta Noc';
     }
 
-    this.scene.background = skyCol;
+    (this.scene.background as THREE.Color).copy(this.tmpSkyCol);
     this.scene.environmentIntensity = envIntensity;
-    this.skyFog.color.copy(skyCol);
+    this.skyFog.color.copy(this.tmpSkyCol);
     this.skyFog.near = fogNear;
     this.skyFog.far = fogFar;
     this.renderer.toneMappingExposure = exposure;
 
     this.dirSunLight.intensity = sunIntensity;
-    this.dirSunLight.color.copy(dirColor);
-    this.hemiLight.color.copy(hemiSky);
-    this.hemiLight.groundColor.copy(hemiGround);
+    this.dirSunLight.color.copy(this.tmpDirColor);
+    this.hemiLight.color.copy(this.tmpHemiSky);
+    this.hemiLight.groundColor.copy(this.tmpHemiGround);
     this.hemiLight.intensity = hemiIntensity;
 
     // Position Sky Dome centered on active actor
     const actor = this.isDismounted ? this.riderPos : this.horsePos;
     this.skyDomeGroup.position.set(actor.x, 0, actor.z);
 
-    // Orbit Sun (visible across 0.14..0.83) & Moon (opposite arc at night)
+    // Orbit Sun & Moon
     const sunArc = ((this.timeOfDay - 0.14) / 0.69) * Math.PI;
     const sunVisible = this.timeOfDay >= 0.13 && this.timeOfDay <= 0.84;
     this.sunGroup.visible = sunVisible;
@@ -1328,11 +1406,10 @@ export class GameEngine {
       const sz = 480;
       this.sunGroup.position.set(sx, sy, sz);
       const horizonWarmth = 1 - Math.min(1, Math.max(0, Math.sin(sunArc)));
-      this.sunCoreMat.color.setHex(0xfff6d1).lerp(new THREE.Color(0xff9248), horizonWarmth * 0.7);
-      this.sunHaloMat.color.setHex(0xffd98a).lerp(new THREE.Color(0xff6b35), horizonWarmth * 0.8);
+      this.sunCoreMat.color.copy(this.cSunCoreBase).lerp(this.cSunCoreWarm, horizonWarmth * 0.7);
+      this.sunHaloMat.color.copy(this.cSunHaloBase).lerp(this.cSunHaloWarm, horizonWarmth * 0.8);
     }
 
-    // Moon orbits across night window (0.78..0.18)
     const nightPhase = this.timeOfDay >= 0.78 ? (this.timeOfDay - 0.78) / 0.4 : (this.timeOfDay + 0.22) / 0.4;
     const moonVisible = this.timeOfDay >= 0.76 || this.timeOfDay <= 0.2;
     this.moonGroup.visible = moonVisible;
@@ -1341,20 +1418,24 @@ export class GameEngine {
       this.moonGroup.position.set(Math.cos(mArc) * 460, Math.sin(mArc) * 380, 500);
     }
 
-    // Stars & Clouds update
+    // Stars & Instanced Clouds update
     const twinkle = 0.9 + Math.sin(this.idleTime * 2.1) * 0.1;
     this.starFieldMat.opacity = starOpacity * twinkle;
     this.starField.visible = starOpacity > 0.02;
     this.starField.rotation.y += dt * 0.002;
 
-    this.cloudMat.color.copy(cloudTint);
+    this.cloudMat.color.copy(this.tmpCloudTint);
     this.cloudMat.opacity = cloudOpacity;
-    for (const c of this.clouds) {
-      c.mesh.position.x += c.speed * dt;
-      if (c.mesh.position.x > 260) {
-        c.mesh.position.x = -260;
-      }
+    for (let i = 0; i < this.cloudPuffs.length; i++) {
+      const p = this.cloudPuffs[i];
+      p.cloudX += p.speed * dt;
+      if (p.cloudX > 260) p.cloudX = -260;
+      this.cloudDummy.position.set(p.cloudX + p.ox, p.cloudY + p.oy, p.cloudZ + p.oz);
+      this.cloudDummy.scale.set(p.sx, p.sy, p.sz);
+      this.cloudDummy.updateMatrix();
+      this.cloudsInstMesh.setMatrixAt(i, this.cloudDummy.matrix);
     }
+    this.cloudsInstMesh.instanceMatrix.needsUpdate = true;
 
     // Directional light follows Sun during day or Moon at night
     const lightSrc = sunVisible ? this.sunGroup.position : this.moonGroup.position;

@@ -1,6 +1,99 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { HorseProfile, RiderProfile } from './types';
 import { MaterialPalette } from './materials';
+
+export interface MaterialBatch {
+  geometry: THREE.BufferGeometry;
+  material: THREE.Material;
+  castShadow: boolean;
+  receiveShadow: boolean;
+}
+
+export function extractMaterialBatches(group: THREE.Group): MaterialBatch[] {
+  group.updateMatrixWorld(true);
+  const byMaterial = new Map<
+    THREE.Material,
+    { geos: THREE.BufferGeometry[]; castShadow: boolean; receiveShadow: boolean }
+  >();
+
+  group.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    const mat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+    if (!mat) return;
+
+    const cloned = obj.geometry.clone();
+    cloned.applyMatrix4(obj.matrixWorld);
+    const nonIdx = cloned.index ? cloned.toNonIndexed() : cloned;
+    if (cloned.index) cloned.dispose();
+
+    if (!nonIdx.getAttribute('normal')) {
+      nonIdx.computeVertexNormals();
+    }
+    if (!nonIdx.getAttribute('uv')) {
+      const count = nonIdx.getAttribute('position').count;
+      nonIdx.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(count * 2), 2));
+    }
+    if (nonIdx.getAttribute('tangent')) {
+      nonIdx.deleteAttribute('tangent');
+    }
+
+    let entry = byMaterial.get(mat);
+    if (!entry) {
+      entry = { geos: [], castShadow: false, receiveShadow: false };
+      byMaterial.set(mat, entry);
+    }
+    entry.geos.push(nonIdx);
+    if (obj.castShadow) entry.castShadow = true;
+    if (obj.receiveShadow) entry.receiveShadow = true;
+  });
+
+  const batches: MaterialBatch[] = [];
+  byMaterial.forEach((entry, material) => {
+    const merged = entry.geos.length === 1 ? entry.geos[0] : mergeGeometries(entry.geos, false);
+    if (entry.geos.length > 1) {
+      entry.geos.forEach((g) => g.dispose());
+    }
+    if (merged) {
+      merged.computeBoundingSphere();
+      batches.push({
+        geometry: merged,
+        material,
+        castShadow: entry.castShadow,
+        receiveShadow: entry.receiveShadow,
+      });
+    }
+  });
+  return batches;
+}
+
+export function optimizeStaticGroup(group: THREE.Group): THREE.Group {
+  const batches = extractMaterialBatches(group);
+  const preservedLights: THREE.Object3D[] = [];
+  group.traverse((obj) => {
+    if (obj instanceof THREE.Light) {
+      obj.updateMatrixWorld(true);
+      const clone = obj.clone();
+      clone.position.setFromMatrixPosition(obj.matrixWorld);
+      preservedLights.push(clone);
+    }
+    if (obj instanceof THREE.Mesh) {
+      obj.geometry.dispose();
+    }
+  });
+
+  group.clear();
+  for (const b of batches) {
+    const mesh = new THREE.Mesh(b.geometry, b.material);
+    mesh.castShadow = b.castShadow;
+    mesh.receiveShadow = b.receiveShadow;
+    group.add(mesh);
+  }
+  for (const light of preservedLights) {
+    group.add(light);
+  }
+  return group;
+}
 
 export interface HorseRig {
   group: THREE.Group;
@@ -1923,7 +2016,9 @@ export function createHobbitBurrow(palette?: MaterialPalette, doorColorHex = 0x2
   group.add(knobPlate, knob);
 
   // Two cozy Round Hobbit Windows with wooden shutters & flowerboxes
-  const flowerColors = [0xf43f5e, 0xfbbf24, 0xc084fc];
+  const flowerMats = [0xf43f5e, 0xfbbf24, 0xc084fc].map(
+    (col) => new THREE.MeshStandardMaterial({ color: col, roughness: 0.55 })
+  );
   [-2.15, 2.15].forEach((wx) => {
     const winGroup = new THREE.Group();
     winGroup.position.set(wx, 1.54, 4.65);
@@ -1942,10 +2037,7 @@ export function createHobbitBurrow(palette?: MaterialPalette, doorColorHex = 0x2
     winGroup.add(frameOuter, pane, mullionV, mullionH, box);
 
     for (let f = -0.35; f <= 0.36; f += 0.23) {
-      const fMat = new THREE.MeshStandardMaterial({
-        color: flowerColors[Math.abs(Math.round(f * 10)) % flowerColors.length],
-        roughness: 0.55,
-      });
+      const fMat = flowerMats[Math.abs(Math.round(f * 10)) % flowerMats.length];
       const bloom = new THREE.Mesh(new THREE.DodecahedronGeometry(0.095, 0), fMat);
       bloom.position.set(f, -0.46, 0.18);
       winGroup.add(bloom);
@@ -2064,7 +2156,7 @@ export function createHobbitBurrow(palette?: MaterialPalette, doorColorHex = 0x2
     group.add(tuft);
   });
 
-  return group;
+  return optimizeStaticGroup(group);
 }
 
 export function createAbandonedStable(palette?: MaterialPalette): THREE.Group {
@@ -2256,7 +2348,7 @@ export function createAbandonedStable(palette?: MaterialPalette): THREE.Group {
   lanternLight.position.set(0, 2.45, 2.0);
   group.add(lanternChain, lanternCap, lantern, lanternLight);
 
-  return group;
+  return optimizeStaticGroup(group);
 }
 
 export function createCampfireSite(palette?: MaterialPalette): THREE.Group {
@@ -2874,7 +2966,7 @@ export function createHobbitCottage(palette?: MaterialPalette, roofColorHex = 0x
   porchLantern.position.set(0.85, 2.35, 3.48);
   group.add(porchLantern);
 
-  return group;
+  return optimizeStaticGroup(group);
 }
 
 // Village Stone Well with shingle gable roof, bucket & warm lantern
@@ -2937,7 +3029,7 @@ export function createVillageWell(palette?: MaterialPalette): THREE.Group {
   lantern.position.set(-0.92, 2.55, 0.25);
   group.add(lantern);
 
-  return group;
+  return optimizeStaticGroup(group);
 }
 
 // Cozy Roadside / Village Lantern Post
@@ -2970,7 +3062,7 @@ export function createVillageLanternPost(palette?: MaterialPalette): THREE.Group
   cap.position.set(0.62, 3.1, 0);
 
   group.add(post, arm, brace, glass, cap);
-  return group;
+  return optimizeStaticGroup(group);
 }
 
 // Hobbit Harvest Wagon loaded with hay bales & apple crates
@@ -3037,7 +3129,7 @@ export function createHobbitWagon(palette?: MaterialPalette): THREE.Group {
     group.add(shaft);
   });
 
-  return group;
+  return optimizeStaticGroup(group);
 }
 
 // Dense Forest Undergrowth & Thorny Thicket Bush (marks impassable woods)

@@ -196,6 +196,8 @@ export function createWorldTerrain(maxAnisotropy = 4): THREE.Mesh {
   const colLonelyGold = new THREE.Color(0x9b7e3c);
 
   const tempCol = new THREE.Color();
+  const tempWork = new THREE.Color();
+  const tempRoad = new THREE.Color();
 
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
@@ -218,12 +220,18 @@ export function createWorldTerrain(maxAnisotropy = 4): THREE.Mesh {
     const patchWave = Math.sin(x * 0.16) * Math.cos(z * 0.14) * 0.5 + 0.5;
 
     if (z < 400) {
-      tempCol.copy(isRoad ? colRoadShire : colGrassShire.clone().lerp(colGrassWarm, patchWave * 0.45));
+      if (isRoad) {
+        tempCol.copy(colRoadShire);
+      } else {
+        tempCol.copy(colGrassShire).lerp(colGrassWarm, patchWave * 0.45);
+      }
     } else if (z < 870) {
       const blend = (z - 400) / 470;
-      const baseCol = colGrassShire.clone().lerp(colForestFloor, blend);
-      baseCol.lerp(colRoadShoulder, patchWave * 0.18);
-      tempCol.copy(isRoad ? colRoadShire.clone().lerp(colMountainRock, 0.25) : baseCol);
+      if (isRoad) {
+        tempCol.copy(colRoadShire).lerp(colMountainRock, 0.25);
+      } else {
+        tempCol.copy(colGrassShire).lerp(colForestFloor, blend).lerp(colRoadShoulder, patchWave * 0.18);
+      }
     } else if (z <= 1520) {
       const trailY = getMountainTrailElevation(z);
       if (y < trailY - 2.0) {
@@ -231,18 +239,29 @@ export function createWorldTerrain(maxAnisotropy = 4): THREE.Mesh {
         tempCol.copy(colMountainRock).lerp(colMountainChasm, depthT * 0.85);
       } else {
         const snowBlend = Math.min(1, Math.max(0, (y - trailY - 8) / 16));
-        const mCol = colMountainRock.clone().lerp(colMountainSnow, snowBlend);
-        tempCol.copy(isRoad ? colRoadShire.clone().lerp(colMountainRock, 0.58) : mCol);
+        if (isRoad) {
+          tempCol.copy(colRoadShire).lerp(colMountainRock, 0.58);
+        } else {
+          tempCol.copy(colMountainRock).lerp(colMountainSnow, snowBlend);
+        }
       }
     } else {
       const goldGlow = (z - 1520) / 380;
-      const pCol = colLonelyRock.clone().lerp(colLonelyGold, goldGlow * 0.38);
-      tempCol.copy(isRoad ? colRoadShire.clone().lerp(colLonelyGold, 0.45) : pCol);
+      if (isRoad) {
+        tempCol.copy(colRoadShire).lerp(colLonelyGold, 0.45);
+      } else {
+        tempCol.copy(colLonelyRock).lerp(colLonelyGold, goldGlow * 0.38);
+      }
     }
 
     if (distToRoad < shoulderHalfWidth) {
-      const roadTone = inMountains ? colRoadShire.clone().lerp(colMountainRock, 0.52) : colRoadShire;
-      tempCol.lerp(roadTone, 1 - roadBlend);
+      if (inMountains) {
+        tempWork.copy(colRoadShire).lerp(colMountainRock, 0.52);
+        tempCol.lerp(tempWork, 1 - roadBlend);
+      } else {
+        tempRoad.copy(colRoadShire);
+        tempCol.lerp(tempRoad, 1 - roadBlend);
+      }
     }
 
     colors.push(tempCol.r, tempCol.g, tempCol.b);
@@ -328,7 +347,7 @@ export function createInstancedFlora(): THREE.Group {
 
   stemInst.computeBoundingSphere();
   blossomInst.computeBoundingSphere();
-  blossomInst.castShadow = true;
+  blossomInst.castShadow = false;
 
   floraGroup.add(stemInst, blossomInst);
   return floraGroup;
