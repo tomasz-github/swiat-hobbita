@@ -1,0 +1,6 @@
+{
+  "name": "Pieśń o Samotnej Górze - Końska Przygoda 3D",
+  "description": "Trójwymiarowa gra jeździecka w baśniowym świecie hobbitów. Stwórz swoją postać i konia, odkrywaj krainy, biwakuj pod gwiazdami, zaprzyjaźnij się z liskami Felkami i dotrzyj do Samotnej Góry!",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
