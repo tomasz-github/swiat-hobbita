@@ -112,6 +112,7 @@ export default function App() {
         onTargetGaitChange: (newTarget) => setSelectedGait(newTarget),
         onDismountChange: (dismounted) => setIsDismounted(dismounted),
         onCampChange: (camped) => setIsCamped(camped),
+        onOpenCampMenu: () => setShowCampModal(true),
         onPositionUpdate: (pos) => {
           setPlayerPos(pos);
           if (engineRef.current) {
@@ -328,6 +329,12 @@ export default function App() {
         <CampModal
           horseName={horse.name}
           onSleepUntilDawn={handleSleepUntilDawn}
+          onPackCampAndMount={() => {
+            if (engineRef.current) {
+              engineRef.current.toggleDismount(true);
+            }
+            setShowCampModal(false);
+          }}
           onClose={() => setShowCampModal(false)}
         />
       )}

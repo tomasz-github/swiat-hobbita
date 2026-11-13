@@ -5,12 +5,14 @@ import { soundEngine } from '../game/audio';
 interface CampModalProps {
   horseName: string;
   onSleepUntilDawn: () => void;
+  onPackCampAndMount: () => void;
   onClose: () => void;
 }
 
 export const CampModal: React.FC<CampModalProps> = ({
   horseName,
   onSleepUntilDawn,
+  onPackCampAndMount,
   onClose,
 }) => {
   const [teaBrewed, setTeaBrewed] = React.useState(false);
@@ -43,8 +45,8 @@ export const CampModal: React.FC<CampModalProps> = ({
         <div className="bg-stone-950/80 border border-stone-800 rounded-2xl p-5 text-center flex flex-col items-center">
           <div className="text-4xl mb-2">🏕️ 🔥 ✨</div>
           <p className="text-sm text-stone-300 leading-relaxed max-w-sm">
-            Ogień cicho trzaska, a nad głową rozciąga się bezkresne rozgwieżdżone niebo Śródziemia.
-            Koń <strong className="text-amber-300">{horseName}</strong> skubie trawę przy namiocie i w spokoju odzyskuje siły.
+            Ogień cicho trzaska, namiot chroni przed nocnym chłodem, a jego ciepły blask odstrasza potwory.
+            Koń <strong className="text-amber-300">{horseName}</strong> odpoczywa obok i w spokoju odzyskuje siły.
           </p>
 
           {teaBrewed && (
@@ -56,13 +58,13 @@ export const CampModal: React.FC<CampModalProps> = ({
         </div>
 
         {/* Actions */}
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           <button
             onClick={onSleepUntilDawn}
             className="w-full flex items-center justify-center gap-3 py-3.5 px-4 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-stone-950 font-bold rounded-xl shadow-lg transition active:scale-98"
           >
             <Sun className="w-5 h-5 stroke-[2.5]" />
-            <span>Nocuj do Świtu (Zregeneruj całą energię)</span>
+            <span>Nocuj w namiocie do Świtu (100% energii)</span>
           </button>
 
           <button
@@ -78,12 +80,20 @@ export const CampModal: React.FC<CampModalProps> = ({
             <span>{teaBrewed ? 'Herbata wypita!' : 'Zaparz kubek herbaty ziołowej'}</span>
           </button>
 
-          <button
-            onClick={onClose}
-            className="w-full py-2.5 text-stone-400 hover:text-stone-200 text-xs font-medium transition"
-          >
-            Zwiń biwak i wracaj do jazdy
-          </button>
+          <div className="grid grid-cols-2 gap-2.5 pt-1">
+            <button
+              onClick={onClose}
+              className="py-2.5 px-3 rounded-xl border border-stone-700 text-stone-300 hover:bg-stone-800 text-xs font-medium transition"
+            >
+              Spaceruj przy ognisku
+            </button>
+            <button
+              onClick={onPackCampAndMount}
+              className="py-2.5 px-3 rounded-xl bg-emerald-700/80 hover:bg-emerald-600 text-white text-xs font-semibold transition"
+            >
+              Zwiń obóz i wsiądź
+            </button>
+          </div>
         </div>
       </div>
     </div>

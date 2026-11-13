@@ -28,6 +28,7 @@ import {
   getRoadCenter,
   createWorldTerrain,
   createInstancedFlora,
+  createInstancedRocks,
   WORLD_LENGTH,
   WORLD_WIDTH,
   WORLD_MILESTONES,
@@ -41,6 +42,7 @@ export interface GameEngineCallbacks {
   onTargetGaitChange: (gait: CruisingGait) => void;
   onDismountChange: (isDismounted: boolean) => void;
   onCampChange: (isCamped: boolean) => void;
+  onOpenCampMenu: () => void;
   onPositionUpdate: (pos: { x: number; y: number; z: number; heading: number }) => void;
   onTimeChange: (timeOfDay: number, timeLabel: string) => void;
   onStaminaChange: (stamina: number, maxStamina: number) => void;
@@ -170,10 +172,11 @@ export class GameEngine {
     this.horseProfile = horseProfile;
     this.riderProfile = riderProfile;
     this.callbacks = callbacks;
-    this.materialPalette = new MaterialPalette();
 
     this.detectSoftwareGl();
     this.initRenderer();
+    const maxAniso = Math.min(8, this.renderer.capabilities.getMaxAnisotropy() || 4);
+    this.materialPalette = new MaterialPalette(maxAniso);
     this.initScene();
     this.initLighting();
     this.initWorld();
@@ -257,12 +260,16 @@ export class GameEngine {
   }
 
   private initWorld() {
-    // 1. Terrain Mesh & Instanced Flora
-    const terrain = createWorldTerrain();
+    // 1. Terrain Mesh, Instanced Flora & Boulders
+    const maxAniso = Math.min(8, this.renderer.capabilities.getMaxAnisotropy() || 4);
+    const terrain = createWorldTerrain(maxAniso);
     this.scene.add(terrain);
 
     const flora = createInstancedFlora();
     this.scene.add(flora);
+
+    const rocks = createInstancedRocks();
+    this.scene.add(rocks);
 
     // 2. Horse and Rider + Standalone Dismounted Rider
     this.horseRig = createHorseAndRider(this.horseProfile, this.riderProfile, this.materialPalette);
@@ -620,7 +627,16 @@ export class GameEngine {
       this.standaloneRiderRig.group.visible = true;
       soundEngine.playChompOrBrush();
     } else {
-      // Mount back on horse (bring horse cleanly underneath if nearby, or walk/teleport to saddle)
+      // Pack camp if active when mounting back onto the horse
+      if (this.isCamped) {
+        this.isCamped = false;
+        if (this.campObject) {
+          this.campObject.visible = false;
+        }
+        this.callbacks.onCampChange(false);
+      }
+
+      // Mount back on horse
       this.isDismounted = false;
       this.riderSpeed = 0;
       this.horseRig.riderGroup.visible = true;
@@ -670,13 +686,19 @@ export class GameEngine {
       }
     }
 
-    // 3. If dismounted and close to horse without camp, remount
+    // 3. If camped and near the tent/fire, open Camp Menu (sleep until dawn / brew tea)
+    if (this.isCamped && actorPos.distanceTo(this.campPos) < 6.0) {
+      this.callbacks.onOpenCampMenu();
+      return;
+    }
+
+    // 4. If dismounted and close to horse without camp, remount
     if (this.isDismounted && !this.isCamped && this.riderPos.distanceTo(this.horsePos) < 3.6) {
       this.toggleDismount(true);
       return;
     }
 
-    // 4. Toggle Cozy Camp under the stars!
+    // 5. Pitch or pack camp under the stars!
     this.toggleCamp();
   }
 
@@ -692,18 +714,20 @@ export class GameEngine {
         this.campObject = createCampfireSite();
         this.scene.add(this.campObject);
       }
-      const campX = this.riderPos.x + Math.cos(this.riderHeading) * 2.4;
-      const campZ = this.riderPos.z + Math.sin(this.riderHeading) * 2.4 + 2.0;
+      // Place tent & campfire directly in front of the rider
+      const campX = this.riderPos.x + Math.sin(this.riderHeading) * 3.2;
+      const campZ = this.riderPos.z + Math.cos(this.riderHeading) * 3.2;
       const campY = getTerrainHeight(campX, campZ);
       this.campPos.set(campX, campY, campZ);
       this.campObject.position.copy(this.campPos);
+      this.campObject.rotation.y = this.riderHeading;
       this.campObject.visible = true;
 
       // Restores stamina
       this.stamina = this.maxStamina;
       this.callbacks.onStaminaChange(this.stamina, this.maxStamina);
       soundEngine.playWhinny();
-      this.callbacks.onInteractPrompt('Zeszłaś z konia i rozbiłaś obóz pod gwiazdami! Możesz spacerować przy ognisku.');
+      this.callbacks.onInteractPrompt('Zeszłaś z konia i rozbiłaś obóz z namiotem pod gwiazdami!');
     } else {
       if (this.campObject) {
         this.campObject.visible = false;
@@ -714,14 +738,11 @@ export class GameEngine {
   }
 
   public sleepUntilDawn() {
-    this.timeOfDay = 0.22; // Dawn
+    this.timeOfDay = 0.22; // Golden dawn
     this.stamina = this.maxStamina;
     this.callbacks.onStaminaChange(this.stamina, this.maxStamina);
     soundEngine.playWhinny();
-    this.toggleCamp();
-    if (this.isDismounted) {
-      this.toggleDismount(true);
-    }
+    this.toggleDismount(true); // Packs camp and mounts horse refreshed for morning ride!
   }
 
   public feedHorseApple() {
@@ -1018,8 +1039,11 @@ export class GameEngine {
     if (absSpeed <= 0.2) {
       // Gentle idle grazing / breathing for parked horse
       const graze = Math.sin(this.idleTime * 1.4) * 0.14;
-      this.horseRig.headNeckGroup.rotation.x = this.isDismounted ? 0.35 + graze : graze * 0.4;
-      this.horseRig.tailJoint.rotation.y = Math.sin(this.idleTime * 2.2) * 0.15;
+      this.horseRig.headNeckGroup.rotation.x = this.isDismounted ? 0.35 + graze : graze * 0.35;
+      this.horseRig.tailJoint.rotation.y = Math.sin(this.idleTime * 2.2) * 0.14;
+      this.horseRig.tailJoint.rotation.x = 0.08;
+      this.horseRig.riderTorso.position.y = 0;
+      this.horseRig.riderTorso.rotation.x = 0;
       this.horseRig.legFL.upper.rotation.x = 0;
       this.horseRig.legFR.upper.rotation.x = 0;
       this.horseRig.legRL.upper.rotation.x = 0;
@@ -1031,35 +1055,38 @@ export class GameEngine {
       return;
     }
 
-    // Natural 4-legged gait biomechanics
-    const swingFL = Math.sin(animPhase) * Math.min(0.65, absSpeed * 0.07);
-    const swingFR = Math.sin(animPhase + Math.PI) * Math.min(0.65, absSpeed * 0.07);
-    const swingRL = Math.sin(animPhase + Math.PI * 0.5) * Math.min(0.65, absSpeed * 0.07);
-    const swingRR = Math.sin(animPhase + Math.PI * 1.5) * Math.min(0.65, absSpeed * 0.07);
+    // Natural 4-legged gait biomechanics (diagonal for trot, rocking lead for canter/gallop)
+    const isGallop = absSpeed > 9.0;
+    const amp = Math.min(0.68, absSpeed * 0.055);
+    const swingFL = Math.sin(animPhase) * amp;
+    const swingFR = Math.sin(animPhase + (isGallop ? 0.55 : Math.PI)) * amp;
+    const swingRL = Math.sin(animPhase + (isGallop ? Math.PI : Math.PI * 0.5)) * amp;
+    const swingRR = Math.sin(animPhase + (isGallop ? Math.PI + 0.55 : Math.PI * 1.5)) * amp;
 
     this.horseRig.legFL.upper.rotation.x = swingFL;
     this.horseRig.legFR.upper.rotation.x = swingFR;
     this.horseRig.legRL.upper.rotation.x = swingRL;
     this.horseRig.legRR.upper.rotation.x = swingRR;
 
-    // Knee tucking on backward swing
-    this.horseRig.legFL.lower.rotation.x = swingFL > 0 ? swingFL * 0.8 : 0;
-    this.horseRig.legFR.lower.rotation.x = swingFR > 0 ? swingFR * 0.8 : 0;
-    this.horseRig.legRL.lower.rotation.x = swingRL < 0 ? -swingRL * 0.8 : 0;
-    this.horseRig.legRR.lower.rotation.x = swingRR < 0 ? -swingRR * 0.8 : 0;
+    // Knee / hock flexion during swing phase
+    this.horseRig.legFL.lower.rotation.x = swingFL > 0 ? swingFL * 0.78 : -swingFL * 0.15;
+    this.horseRig.legFR.lower.rotation.x = swingFR > 0 ? swingFR * 0.78 : -swingFR * 0.15;
+    this.horseRig.legRL.lower.rotation.x = swingRL < 0 ? -swingRL * 0.72 : 0;
+    this.horseRig.legRR.lower.rotation.x = swingRR < 0 ? -swingRR * 0.72 : 0;
 
-    // Head and neck bobbing with gait
-    const headBob = Math.sin(animPhase * 2) * Math.min(0.08, absSpeed * 0.008);
-    this.horseRig.headNeckGroup.rotation.x = headBob;
+    // Head and neck extension + rhythmic bobbing with gait
+    const neckExtend = Math.min(0.2, absSpeed * 0.011);
+    const headBob = Math.sin(animPhase * 2) * Math.min(0.08, absSpeed * 0.006);
+    this.horseRig.headNeckGroup.rotation.x = neckExtend + headBob;
 
-    // Tail swishing behind
-    const tailSwish = Math.sin(this.stridePhase * 1.2) * 0.2;
+    // Flowing tail lift & swish
+    const tailSwish = Math.sin(this.stridePhase * 1.2) * 0.18;
     this.horseRig.tailJoint.rotation.y = tailSwish;
-    this.horseRig.tailJoint.rotation.x = Math.min(0.6, absSpeed * 0.04);
+    this.horseRig.tailJoint.rotation.x = Math.min(0.65, 0.12 + absSpeed * 0.032);
 
-    // Rider posture & subtle bob
-    this.horseRig.riderTorso.rotation.x = -headBob * 0.8;
-    this.horseRig.riderTorso.position.y = 0.35 + Math.abs(Math.sin(animPhase)) * 0.06;
+    // Rider forward leaning seat & subtle saddle bounce (anchored at y = 0!)
+    this.horseRig.riderTorso.rotation.x = Math.min(0.18, absSpeed * 0.01) - headBob * 0.6;
+    this.horseRig.riderTorso.position.y = Math.abs(Math.sin(animPhase)) * 0.042;
   }
 
   private updateFox(dt: number) {
@@ -1115,9 +1142,25 @@ export class GameEngine {
         return;
       }
 
+      // Campfire keeps monsters safely at bay!
+      if (this.isCamped) {
+        const cdx = m.x - this.campPos.x;
+        const cdz = m.z - this.campPos.z;
+        const cDist = Math.sqrt(cdx * cdx + cdz * cdz);
+        if (cDist < 14 && cDist > 0.1) {
+          m.x += (cdx / cDist) * 4.5 * dt;
+          m.z += (cdz / cDist) * 4.5 * dt;
+          mesh.rotation.y = Math.atan2(cdx, cdz);
+          const y = getTerrainHeight(m.x, m.z);
+          mesh.position.set(m.x, y, m.z);
+          return;
+        }
+      }
+
       // Patrol or slowly approach player if within 22 units
-      const dx = this.horsePos.x - m.x;
-      const dz = this.horsePos.z - m.z;
+      const targetActor = this.isDismounted ? this.riderPos : this.horsePos;
+      const dx = targetActor.x - m.x;
+      const dz = targetActor.z - m.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
 
       if (dist < 20 && dist > 3.5) {
@@ -1144,6 +1187,20 @@ export class GameEngine {
   }
 
   private updateParticles(dt: number) {
+    // Flickering campfire flames & warm light
+    if (this.isCamped && this.campObject && this.campObject.visible) {
+      const flames = this.campObject.getObjectByName('CampFlames');
+      if (flames) {
+        const flicker = 0.88 + Math.sin(this.idleTime * 14) * 0.12 + Math.cos(this.idleTime * 23) * 0.08;
+        flames.scale.set(1, flicker, 1);
+        flames.rotation.y = Math.sin(this.idleTime * 5) * 0.15;
+      }
+      const fireLight = this.campObject.getObjectByName('CampFireLight') as THREE.PointLight | undefined;
+      if (fireLight) {
+        fireLight.intensity = 2.8 + Math.sin(this.idleTime * 16) * 0.6;
+      }
+    }
+
     // Star burst particle animation
     if (this.starBurstActive) {
       this.starBurstTimer -= dt;
@@ -1170,7 +1227,8 @@ export class GameEngine {
 
     // Fireflies floating
     if (this.fireflyParticles) {
-      this.fireflyParticles.position.set(this.horsePos.x, this.horsePos.y, this.horsePos.z);
+      const actor = this.isDismounted ? this.riderPos : this.horsePos;
+      this.fireflyParticles.position.set(actor.x, actor.y, actor.z);
     }
   }
 
@@ -1236,10 +1294,12 @@ export class GameEngine {
     }
 
     if (!prompt && this.isDismounted) {
-      if (this.riderPos.distanceTo(this.horsePos) < 3.6) {
+      if (this.isCamped && actorPos.distanceTo(this.campPos) < 6.0) {
+        prompt = '[E] Odpocznij w namiocie (Nocuj do świtu) · [G] Wsiądź na konia 🏕️';
+      } else if (this.riderPos.distanceTo(this.horsePos) < 3.6) {
         prompt = '[G] lub [E] Wsiądź z powrotem na konia 🐎';
       } else if (this.isCamped) {
-        prompt = 'Obóz rozbity! Spaceruj wokół ogniska lub naciśnij [G], aby wrócić na konia 🏕️';
+        prompt = 'Obóz rozbity! Podejdź do ogniska [E] lub naciśnij [G], aby wrócić na konia 🏕️';
       }
     }
 
